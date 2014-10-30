@@ -78,7 +78,7 @@ static int wsa_init_done = 0;
 #include <errno.h>
 
 #if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) ||  \
-    defined(__DragonFly__)
+    defined(__DragonFly__) || defined(__ECOS)
 #include <sys/endian.h>
 #elif defined(__APPLE__) || defined(HAVE_MACHINE_ENDIAN_H) ||   \
       defined(EFIX64) || defined(EFI32)
@@ -108,6 +108,7 @@ static int wsa_init_done = 0;
 #if defined(_MSC_VER) && !defined(EFIX64) && !defined(EFI32)
 #include <basetsd.h>
 typedef UINT32 uint32_t;
+#elif defined(__ECOS)
 #else
 #include <inttypes.h>
 #endif

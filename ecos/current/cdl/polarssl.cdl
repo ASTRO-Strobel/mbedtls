@@ -1,0 +1,83 @@
+cdl_package CYGPKG_POLARSSL {
+	display "PolarSSL"
+	parent CYGPKG_NET
+
+	include_dir polarssl
+
+	requires CYGPKG_IO
+	requires CYGPKG_LIBC
+	requires CYGPKG_NET
+
+	compile \
+		aes.c		aesni.c		arc4.c			\
+		asn1parse.c								\
+		asn1write.c base64.c	bignum.c		\
+		blowfish.c	camellia.c	ccm.c       	\
+		certs.c		cipher.c	cipher_wrap.c	\
+		ctr_drbg.c	debug.c		des.c			\
+		dhm.c		ecdh.c		ecdsa.c			\
+		ecp.c		ecp_curves.c ecos.c			\
+		entropy.c	entropy_poll.c				\
+		error.c		gcm.c		havege.c		\
+		hmac_drbg.c								\
+		md.c		md_wrap.c	md2.c			\
+		md4.c		md5.c						\
+		memory_buffer_alloc.c	net.c			\
+		oid.c									\
+		padlock.c	pbkdf2.c	pem.c			\
+		pkcs5.c		pkcs11.c	pkcs12.c		\
+		pk.c		pk_wrap.c	pkparse.c		\
+		pkwrite.c	platform.c	ripemd160.c		\
+		rsa.c		sha1.c		sha256.c		\
+		sha512.c	ssl_cache.c	ssl_cli.c		\
+		ssl_srv.c   ssl_ciphersuites.c			\
+		ssl_tls.c	threading.c	timing.c		\
+		version.c	version_features.c			\
+		x509.c		x509_create.c				\
+		x509_crl.c	x509_crt.c	x509_csr.c		\
+		x509write_crt.c			x509write_csr.c	\
+		xtea.c
+
+	cdl_component CYGPKG_POLARSSL_OPTIONS {
+		display "PolarSSL build options"
+		flavor none
+		no_define
+
+		cdl_option CYGPKG_POLARSSL_CFLAGS_ADD {
+			display "Additional compiler flags"
+			flavor data
+			no_define
+			default_value { "-D__ECOS" }
+			description "additional compiler flags for PolarSSL"
+		}
+		
+		cdl_option CYGPKG_POLARSSL_CFLAGS_REMOVE {
+            display "Suppressed compiler flags"
+            flavor  data
+            no_define
+            default_value { "" }
+            description   "
+                This option modifies the set of compiler flags for
+                building the HTTP server package. These flags are removed from
+                the set of global flags if present."
+        }
+        
+        cdl_option CYGNUM_POLARSSL_DEBUG_ENABLE {
+   			display  "Enable debugging"
+   			default_value 0
+   			description  "This option enables debugging code in PolarSSL.
+   				This really hurts performance and it also introduces a side-channel
+   				attack and should thus not be left enabled in production code."
+		}
+        
+        cdl_option CYGNUM_POLARSSL_DEBUG_LEVEL {
+   			display  "Debug level"
+   			flavor data
+   			default_value 0
+   			description  "This option sets the debug level to use in PolarSSL.
+   				Use 2 for medium detail, 4 for lots of info."
+		}
+        
+	}
+
+}

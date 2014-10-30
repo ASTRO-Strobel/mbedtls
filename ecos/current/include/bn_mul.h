@@ -718,6 +718,50 @@
     );
 
 #endif /* MIPS */
+
+#define WITH_CUSTOM_NIOS2_OPCODE
+
+#ifdef __ECOS
+#include "ecos.h"
+
+#ifdef __MULT64
+#define MULADDC_INIT            \
+    asm(                        \
+        "                       \
+        ldw     r10, %3;         \
+        ldw     r11, %4;         \
+        ldw     r12, %5;         \
+        ldw     r13, %6;         \
+        ldw r14, 0(r10);         \
+		custom 0, zero, r14, r13; \
+        "
+
+// *s, *d, c, b
+
+#define MULADDC_CORE            \
+		"                       \
+		ldw r14, 0(r11);        \
+		custom 1, r14, r14, r12;  \
+		stw r14, 0(r11);        \
+		addi r10, r10, 4;       \
+		addi r11, r11, 4;       \
+        ldw r14, 0(r10);         \
+		custom 0, r12, r14, r13; \
+		"
+
+#define MULADDC_STOP            \
+        "                       \
+        stw     r12, %0;         \
+        stw     r11, %1;         \
+        stw     r10, %2;         \
+        "                       \
+        : "=m" (c), "=m" (d), "=m" (s)                      \
+        : "m" (s), "m" (d), "m" (c), "m" (b)                \
+        : "r10", "r11", "r12", "r13", "r14"                 \
+    );
+
+#endif
+#endif /* ECOS */
 #endif /* GNUC */
 
 #if (defined(_MSC_VER) && defined(_M_IX86)) || defined(__WATCOMC__)

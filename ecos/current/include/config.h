@@ -31,6 +31,9 @@
 #ifndef POLARSSL_CONFIG_H
 #define POLARSSL_CONFIG_H
 
+#include <pkgconf/system.h>
+#include <pkgconf/polarssl.h>
+
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_DEPRECATE)
 #define _CRT_SECURE_NO_DEPRECATE 1
 #endif
@@ -112,7 +115,7 @@
  *
  * Comment if your system does not support the IPv6 socket interface
  */
-#define POLARSSL_HAVE_IPV6
+// #define POLARSSL_HAVE_IPV6
 
 /**
  * \def POLARSSL_PLATFORM_MEMORY
@@ -339,15 +342,15 @@
 #define POLARSSL_ECP_DP_SECP224R1_ENABLED
 #define POLARSSL_ECP_DP_SECP256R1_ENABLED
 #define POLARSSL_ECP_DP_SECP384R1_ENABLED
-#define POLARSSL_ECP_DP_SECP521R1_ENABLED
+// #define POLARSSL_ECP_DP_SECP521R1_ENABLED
 #define POLARSSL_ECP_DP_SECP192K1_ENABLED
 #define POLARSSL_ECP_DP_SECP224K1_ENABLED
 #define POLARSSL_ECP_DP_SECP256K1_ENABLED
-#define POLARSSL_ECP_DP_BP256R1_ENABLED
-#define POLARSSL_ECP_DP_BP384R1_ENABLED
-#define POLARSSL_ECP_DP_BP512R1_ENABLED
+//#define POLARSSL_ECP_DP_BP256R1_ENABLED
+//#define POLARSSL_ECP_DP_BP384R1_ENABLED
+//#define POLARSSL_ECP_DP_BP512R1_ENABLED
 //#define POLARSSL_ECP_DP_M221_ENABLED  // Not implemented yet!
-#define POLARSSL_ECP_DP_M255_ENABLED
+// #define POLARSSL_ECP_DP_M255_ENABLED
 //#define POLARSSL_ECP_DP_M383_ENABLED  // Not implemented yet!
 //#define POLARSSL_ECP_DP_M511_ENABLED  // Not implemented yet!
 
@@ -396,7 +399,7 @@
  *      TLS_PSK_WITH_3DES_EDE_CBC_SHA
  *      TLS_PSK_WITH_RC4_128_SHA
  */
-#define POLARSSL_KEY_EXCHANGE_PSK_ENABLED
+// #define POLARSSL_KEY_EXCHANGE_PSK_ENABLED
 
 /**
  * \def POLARSSL_KEY_EXCHANGE_DHE_PSK_ENABLED
@@ -420,7 +423,7 @@
  *      TLS_DHE_PSK_WITH_3DES_EDE_CBC_SHA
  *      TLS_DHE_PSK_WITH_RC4_128_SHA
  */
-#define POLARSSL_KEY_EXCHANGE_DHE_PSK_ENABLED
+// #define POLARSSL_KEY_EXCHANGE_DHE_PSK_ENABLED
 
 /**
  * \def POLARSSL_KEY_EXCHANGE_ECDHE_PSK_ENABLED
@@ -440,7 +443,7 @@
  *      TLS_ECDHE_PSK_WITH_3DES_EDE_CBC_SHA
  *      TLS_ECDHE_PSK_WITH_RC4_128_SHA
  */
-#define POLARSSL_KEY_EXCHANGE_ECDHE_PSK_ENABLED
+// #define POLARSSL_KEY_EXCHANGE_ECDHE_PSK_ENABLED
 
 /**
  * \def POLARSSL_KEY_EXCHANGE_RSA_PSK_ENABLED
@@ -465,7 +468,7 @@
  *      TLS_RSA_PSK_WITH_3DES_EDE_CBC_SHA
  *      TLS_RSA_PSK_WITH_RC4_128_SHA
  */
-#define POLARSSL_KEY_EXCHANGE_RSA_PSK_ENABLED
+// #define POLARSSL_KEY_EXCHANGE_RSA_PSK_ENABLED
 
 /**
  * \def POLARSSL_KEY_EXCHANGE_RSA_ENABLED
@@ -616,7 +619,7 @@
  *      TLS_ECDH_RSA_WITH_CAMELLIA_128_GCM_SHA256
  *      TLS_ECDH_RSA_WITH_CAMELLIA_256_GCM_SHA384
  */
-#define POLARSSL_KEY_EXCHANGE_ECDH_RSA_ENABLED
+//#define POLARSSL_KEY_EXCHANGE_ECDH_RSA_ENABLED
 
 /**
  * \def POLARSSL_PK_PARSE_EC_EXTENDED
@@ -688,7 +691,7 @@
  *
  * Uncomment this macro to prevent loading of default entropy functions.
  */
-//#define POLARSSL_NO_DEFAULT_ENTROPY_SOURCES
+#define POLARSSL_NO_DEFAULT_ENTROPY_SOURCES
 
 /**
  * \def POLARSSL_NO_PLATFORM_ENTROPY
@@ -699,7 +702,7 @@
  *
  * Uncomment this macro to disable the built-in platform entropy functions.
  */
-//#define POLARSSL_NO_PLATFORM_ENTROPY
+#define POLARSSL_NO_PLATFORM_ENTROPY
 
 /**
  * \def POLARSSL_ENTROPY_FORCE_SHA256
@@ -715,7 +718,7 @@
  * This option is only useful if both POLARSSL_SHA256_C and
  * POLARSSL_SHA512_C are defined. Otherwise the available hash module is used.
  */
-//#define POLARSSL_ENTROPY_FORCE_SHA256
+#define POLARSSL_ENTROPY_FORCE_SHA256
 
 /**
  * \def POLARSSL_MEMORY_DEBUG
@@ -809,7 +812,9 @@
  * a timing side-channel.
  *
  */
-//#define POLARSSL_SSL_DEBUG_ALL
+#ifdef CYGNUM_POLARSSL_DEBUG_ENABLE
+#define POLARSSL_SSL_DEBUG_ALL
+#endif
 
 /**
  * \def POLARSSL_SSL_HW_RECORD_ACCEL
@@ -860,7 +865,7 @@
  *
  * Comment this macro to disable support for SSL 3.0
  */
-#define POLARSSL_SSL_PROTO_SSL3
+// #define POLARSSL_SSL_PROTO_SSL3
 
 /**
  * \def POLARSSL_SSL_PROTO_TLS1
@@ -962,7 +967,7 @@
  *
  * Uncomment this to allow your own alternate threading implementation.
  */
-//#define POLARSSL_THREADING_ALT
+#define POLARSSL_THREADING_ALT
 
 /**
  * \def POLARSSL_THREADING_PTHREAD
@@ -986,7 +991,7 @@
  *
  * Comment this to disable run-time checking and save ROM space
  */
-#define POLARSSL_VERSION_FEATURES
+//#define POLARSSL_VERSION_FEATURES
 
 /**
  * \def POLARSSL_X509_ALLOW_EXTENSIONS_NON_V3
@@ -1085,7 +1090,7 @@
  *
  * This modules adds support for the AES-NI instructions on x86-64
  */
-#define POLARSSL_AESNI_C
+// #define POLARSSL_AESNI_C
 
 /**
  * \def POLARSSL_AES_C
@@ -1183,7 +1188,7 @@
  *      TLS_RSA_PSK_WITH_RC4_128_SHA
  *      TLS_PSK_WITH_RC4_128_SHA
  */
-#define POLARSSL_ARC4_C
+//#define POLARSSL_ARC4_C
 
 /**
  * \def POLARSSL_ASN1_PARSE_C
@@ -1371,7 +1376,9 @@
  *
  * This module provides debugging functions.
  */
+#ifdef CYGNUM_POLARSSL_DEBUG_ENABLE
 #define POLARSSL_DEBUG_C
+#endif
 
 /**
  * \def POLARSSL_DES_C
@@ -1397,7 +1404,7 @@
  *
  * PEM_PARSE uses DES/3DES for decrypting encrypted keys.
  */
-#define POLARSSL_DES_C
+// #define POLARSSL_DES_C
 
 /**
  * \def POLARSSL_DHM_C
@@ -1653,7 +1660,7 @@
  *
  * This modules adds support for the VIA PadLock on x86.
  */
-#define POLARSSL_PADLOCK_C
+// #define POLARSSL_PADLOCK_C
 
 /**
  * \def POLARSSL_PBKDF2_C
@@ -1959,7 +1966,7 @@
  *
  * Enable this layer to allow use of mutexes within PolarSSL
  */
-//#define POLARSSL_THREADING_C
+#define POLARSSL_THREADING_C
 
 /**
  * \def POLARSSL_TIMING_C
@@ -1971,7 +1978,7 @@
  *
  * This module is used by the HAVEGE random number generator.
  */
-#define POLARSSL_TIMING_C
+//#define POLARSSL_TIMING_C
 
 /**
  * \def POLARSSL_VERSION_C
@@ -2092,7 +2099,7 @@
  * Module:  library/xtea.c
  * Caller:
  */
-#define POLARSSL_XTEA_C
+//#define POLARSSL_XTEA_C
 
 /* \} name SECTION: PolarSSL modules */
 
@@ -2171,7 +2178,7 @@
 //#define SSL_CIPHERSUITES TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
 
 /* Debug options */
-//#define POLARSSL_DEBUG_DFL_MODE POLARSSL_DEBUG_LOG_FULL /**< Default log: Full or Raw */
+#define POLARSSL_DEBUG_DFL_MODE POLARSSL_DEBUG_LOG_RAW /**< Default log: Full or Raw */
 
 /* \} name SECTION: Module configuration options */
 

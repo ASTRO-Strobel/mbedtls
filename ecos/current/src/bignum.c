@@ -1156,8 +1156,10 @@ int mpi_mul_mpi( mpi *X, const mpi *A, const mpi *B )
     MPI_CHK( mpi_grow( X, i + j ) );
     MPI_CHK( mpi_lset( X, 0 ) );
 
+    cyg_mutex_lock(&mutex_mpi_mul);
     for( i++; j > 0; j-- )
         mpi_mul_hlp( i - 1, A->p, X->p + j - 1, B->p[j - 1] );
+    cyg_mutex_unlock(&mutex_mpi_mul);
 
     X->s = A->s * B->s;
 
@@ -1486,6 +1488,7 @@ static void mpi_montmul( mpi *A, const mpi *B, const mpi *N, t_uint mm,
     n = N->n;
     m = ( B->n < n ) ? B->n : n;
 
+    cyg_mutex_lock(&mutex_mpi_mul);
     for( i = 0; i < n; i++ )
     {
         /*
@@ -1499,6 +1502,7 @@ static void mpi_montmul( mpi *A, const mpi *B, const mpi *N, t_uint mm,
 
         *d++ = u0; d[n + 1] = 0;
     }
+    cyg_mutex_unlock(&mutex_mpi_mul);
 
     memcpy( A->p, d, ( n + 1 ) * ciL );
 
