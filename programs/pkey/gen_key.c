@@ -64,10 +64,15 @@ int main( int argc, char *argv[] )
 
 #define DFL_TYPE                POLARSSL_PK_RSA
 #define DFL_RSA_KEYSIZE         4096
-#define DFL_EC_CURVE            ecp_curve_list()->grp_id
 #define DFL_FILENAME            "keyfile.key"
 #define DFL_FORMAT              FORMAT_PEM
 #define DFL_USE_DEV_RANDOM      0
+
+#if defined(POLARSSL_ECP_C)
+#define DFL_EC_CURVE            ecp_curve_list()->grp_id
+#else
+#define DFL_EC_CURVE            0
+#endif
 
 /*
  * global options
@@ -248,15 +253,18 @@ int main( int argc, char *argv[] )
         else if( strcmp( p, "rsa_keysize" ) == 0 )
         {
             opt.rsa_keysize = atoi( q );
-            if( opt.rsa_keysize < 1024 || opt.rsa_keysize > 8192 )
+            if( opt.rsa_keysize < 1024 ||
+                opt.rsa_keysize > POLARSSL_MPI_MAX_BITS )
                 goto usage;
         }
+#if defined(POLARSSL_ECP_C)
         else if( strcmp( p, "ec_curve" ) == 0 )
         {
             if( ( curve_info = ecp_curve_info_from_name( q ) ) == NULL )
                 goto usage;
             opt.ec_curve = curve_info->grp_id;
         }
+#endif
         else if( strcmp( p, "filename" ) == 0 )
             opt.filename = q;
         else if( strcmp( p, "use_dev_random" ) == 0 )
@@ -373,7 +381,18 @@ int main( int argc, char *argv[] )
 #endif
         printf("  ! key type not supported\n");
 
-    write_private_key( &key, opt.filename );
+    /*
+     * 1.3 Export key
+     */
+    printf( "  . Writing key to file..." );
+
+    if( ( ret = write_private_key( &key, opt.filename ) ) != 0 )
+    {
+        printf( " failed\n" );
+        goto exit;
+    }
+
+    printf( " ok\n" );
 
 exit:
 

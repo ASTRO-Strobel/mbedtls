@@ -85,6 +85,7 @@ int main( int argc, char *argv[] )
 #define DFL_RENEGOTIATION       SSL_RENEGOTIATION_DISABLED
 #define DFL_ALLOW_LEGACY        SSL_LEGACY_NO_RENEGOTIATION
 #define DFL_RENEGOTIATE         0
+#define DFL_EXCHANGES           1
 #define DFL_MIN_VERSION         -1
 #define DFL_MAX_VERSION         -1
 #define DFL_AUTH_MODE           SSL_VERIFY_REQUIRED
@@ -120,6 +121,8 @@ struct options
     int renegotiation;          /* enable / disable renegotiation           */
     int allow_legacy;           /* allow legacy renegotiation               */
     int renegotiate;            /* attempt renegotiation?                   */
+    int renego_delay;           /* delay before enforcing renegotiation     */
+    int exchanges;              /* number of data exchanges                 */
     int min_version;            /* minimum protocol version accepted        */
     int max_version;            /* maximum protocol version accepted        */
     int auth_mode;              /* verify mode for connection               */
@@ -303,6 +306,7 @@ static int my_verify( void *data, x509_crt *crt, int depth, int *flags )
     "    renegotiation=%%d    default: 1 (enabled)\n"       \
     "    allow_legacy=%%d     default: 0 (disabled)\n"      \
     "    renegotiate=%%d      default: 0 (disabled)\n"      \
+    "    exchanges=%%d        default: 1\n"                 \
     "    reconnect=%%d        default: 0 (disabled)\n"      \
     USAGE_TIME                                              \
     USAGE_TICKETS                                           \
@@ -322,7 +326,7 @@ static int my_verify( void *data, x509_crt *crt, int depth, int *flags )
 
 int main( int argc, char *argv[] )
 {
-    int ret = 0, len, server_fd, i, written, frags;
+    int ret = 0, len, tail_len, server_fd, i, written, frags;
     unsigned char buf[SSL_MAX_CONTENT_LEN + 1];
 #if defined(POLARSSL_KEY_EXCHANGE__SOME__PSK_ENABLED)
     unsigned char psk[POLARSSL_PSK_MAX_LEN];
@@ -399,6 +403,7 @@ int main( int argc, char *argv[] )
     opt.renegotiation       = DFL_RENEGOTIATION;
     opt.allow_legacy        = DFL_ALLOW_LEGACY;
     opt.renegotiate         = DFL_RENEGOTIATE;
+    opt.exchanges           = DFL_EXCHANGES;
     opt.min_version         = DFL_MIN_VERSION;
     opt.max_version         = DFL_MAX_VERSION;
     opt.auth_mode           = DFL_AUTH_MODE;
@@ -484,6 +489,12 @@ int main( int argc, char *argv[] )
         {
             opt.renegotiate = atoi( q );
             if( opt.renegotiate < 0 || opt.renegotiate > 1 )
+                goto usage;
+        }
+        else if( strcmp( p, "exchanges" ) == 0 )
+        {
+            opt.exchanges = atoi( q );
+            if( opt.exchanges < 1 )
                 goto usage;
         }
         else if( strcmp( p, "reconnect" ) == 0 )
@@ -1055,26 +1066,20 @@ send_request:
     printf( "  > Write to server:" );
     fflush( stdout );
 
-    if( strcmp( opt.request_page, "SERVERQUIT" ) == 0 )
-        len = sprintf( (char *) buf, "%s", opt.request_page );
-    else
+    len = snprintf( (char *) buf, sizeof(buf) - 1, GET_REQUEST,
+                    opt.request_page );
+    tail_len = strlen( GET_REQUEST_END );
+
+    /* Add padding to GET request to reach opt.request_size in length */
+    if( opt.request_size != DFL_REQUEST_SIZE &&
+        len + tail_len < opt.request_size )
     {
-        size_t tail_len = strlen( GET_REQUEST_END );
-
-        len = snprintf( (char *) buf, sizeof(buf) - 1, GET_REQUEST,
-                        opt.request_page );
-
-        /* Add padding to GET request to reach opt.request_size in length */
-        if( opt.request_size != DFL_REQUEST_SIZE &&
-            len + tail_len < (size_t) opt.request_size )
-        {
-            memset( buf + len, 'A', opt.request_size - len - tail_len );
-            len += opt.request_size - len - tail_len;
-        }
-
-        strncpy( (char *) buf + len, GET_REQUEST_END, sizeof(buf) - len - 1 );
-        len += tail_len;
+        memset( buf + len, 'A', opt.request_size - len - tail_len );
+        len += opt.request_size - len - tail_len;
     }
+
+    strncpy( (char *) buf + len, GET_REQUEST_END, sizeof(buf) - len - 1 );
+    len += tail_len;
 
     /* Truncate if request size is smaller than the "natural" size */
     if( opt.request_size != DFL_REQUEST_SIZE &&
@@ -1114,31 +1119,80 @@ send_request:
         memset( buf, 0, sizeof( buf ) );
         ret = ssl_read( &ssl, buf, len );
 
-        if( ret == POLARSSL_ERR_NET_WANT_READ || ret == POLARSSL_ERR_NET_WANT_WRITE )
+        if( ret == POLARSSL_ERR_NET_WANT_READ ||
+            ret == POLARSSL_ERR_NET_WANT_WRITE )
             continue;
 
-        if( ret == POLARSSL_ERR_SSL_PEER_CLOSE_NOTIFY )
-            break;
-
-        if( ret < 0 )
+        if( ret <= 0 )
         {
-            printf( "failed\n  ! ssl_read returned -0x%x\n\n", -ret );
-            break;
-        }
+            switch( ret )
+            {
+                case POLARSSL_ERR_SSL_PEER_CLOSE_NOTIFY:
+                    printf( " connection was closed gracefully\n" );
+                    ret = 0;
+                    goto close_notify;
 
-        if( ret == 0 )
-        {
-            printf("\n\nEOF\n\n");
-            ssl_close_notify( &ssl );
-            break;
+                case 0:
+                case POLARSSL_ERR_NET_CONN_RESET:
+                    printf( " connection was reset by peer\n" );
+                    ret = 0;
+                    goto reconnect;
+
+                default:
+                    printf( " ssl_read returned -0x%x\n", -ret );
+                    goto exit;
+            }
         }
 
         len = ret;
         buf[len] = '\0';
         printf( " %d bytes read\n\n%s", len, (char *) buf );
+
+        /* End of message should be detected according to the syntax of the
+         * application protocol (eg HTTP), just use a dummy test here. */
+        if( ret > 0 && buf[len-1] == '\n' )
+        {
+            ret = 0;
+            break;
+        }
     }
     while( 1 );
 
+    /*
+     * 7b. Continue doing data exchanges?
+     */
+    if( --opt.exchanges > 0 )
+        goto send_request;
+
+    /*
+     * 8. Done, cleanly close the connection
+     */
+close_notify:
+    printf( "  . Closing the connection..." );
+
+    while( ( ret = ssl_close_notify( &ssl ) ) < 0 )
+    {
+        if( ret == POLARSSL_ERR_NET_CONN_RESET )
+        {
+            printf( " ok (already closed by peer)\n" );
+            ret = 0;
+            goto reconnect;
+        }
+
+        if( ret != POLARSSL_ERR_NET_WANT_READ &&
+            ret != POLARSSL_ERR_NET_WANT_WRITE )
+        {
+            printf( " failed\n  ! ssl_close_notify returned %d\n\n", ret );
+            goto reconnect;
+        }
+    }
+
+    printf( " ok\n" );
+
+    /*
+     * 9. Reconnect?
+     */
+reconnect:
     if( opt.reconnect != 0 )
     {
         --opt.reconnect;
@@ -1187,10 +1241,10 @@ send_request:
         goto send_request;
     }
 
+    /*
+     * Cleanup and exit
+     */
 exit:
-    if( ret == POLARSSL_ERR_SSL_PEER_CLOSE_NOTIFY )
-        ret = 0;
-
 #ifdef POLARSSL_ERROR_C
     if( ret != 0 )
     {
@@ -1202,6 +1256,7 @@ exit:
 
     if( server_fd )
         net_close( server_fd );
+
 #if defined(POLARSSL_X509_CRT_PARSE_C)
     x509_crt_free( &clicert );
     x509_crt_free( &cacert );
@@ -1211,8 +1266,6 @@ exit:
     ssl_free( &ssl );
     ctr_drbg_free( &ctr_drbg );
     entropy_free( &entropy );
-
-    memset( &ssl, 0, sizeof( ssl ) );
 
 #if defined(_WIN32)
     printf( "  + Press Enter to exit this program.\n" );

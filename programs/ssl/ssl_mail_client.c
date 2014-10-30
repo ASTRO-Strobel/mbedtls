@@ -375,6 +375,7 @@ int main( int argc, char *argv[] )
      */
     server_fd = 0;
     memset( &ssl, 0, sizeof( ssl_context ) );
+    memset( &buf, 0, sizeof( buf ) );
     x509_crt_init( &cacert );
     x509_crt_init( &clicert );
     pk_init( &pkey );
@@ -718,8 +719,13 @@ int main( int argc, char *argv[] )
         fflush( stdout );
 
         n = sizeof( buf );
-        len = base64_encode( base, &n, (const unsigned char *) opt.user_name,
+        ret = base64_encode( base, &n, (const unsigned char *) opt.user_name,
                              strlen( opt.user_name ) );
+
+        if( ret != 0 ) {
+            printf( " failed\n  ! base64_encode returned %d\n\n", ret );
+            goto exit;
+        }
         len = sprintf( (char *) buf, "%s\r\n", base );
         ret = write_ssl_and_get_response( &ssl, buf, len );
         if( ret < 300 || ret > 399 )
@@ -733,8 +739,13 @@ int main( int argc, char *argv[] )
         printf( "  > Write password to server: %s", opt.user_pwd );
         fflush( stdout );
 
-        len = base64_encode( base, &n, (const unsigned char *) opt.user_pwd,
+        ret = base64_encode( base, &n, (const unsigned char *) opt.user_pwd,
                              strlen( opt.user_pwd ) );
+
+        if( ret != 0 ) {
+            printf( " failed\n  ! base64_encode returned %d\n\n", ret );
+            goto exit;
+        }
         len = sprintf( (char *) buf, "%s\r\n", base );
         ret = write_ssl_and_get_response( &ssl, buf, len );
         if( ret < 200 || ret > 399 )

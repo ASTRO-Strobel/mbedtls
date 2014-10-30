@@ -64,6 +64,10 @@ int main( int argc, char *argv[] )
 #include <stdlib.h>
 #include <stdio.h>
 
+#if !defined(_WIN32)
+#include <signal.h>
+#endif
+
 #include "polarssl/net.h"
 #include "polarssl/ssl.h"
 #include "polarssl/entropy.h"
@@ -100,6 +104,7 @@ int main( int argc, char *argv[] )
 #define DFL_ALLOW_LEGACY        SSL_LEGACY_NO_RENEGOTIATION
 #define DFL_RENEGOTIATE         0
 #define DFL_RENEGO_DELAY        -2
+#define DFL_EXCHANGES           1
 #define DFL_MIN_VERSION         -1
 #define DFL_MAX_VERSION         -1
 #define DFL_AUTH_MODE           SSL_VERIFY_OPTIONAL
@@ -159,6 +164,7 @@ struct options
     int allow_legacy;           /* allow legacy renegotiation               */
     int renegotiate;            /* attempt renegotiation?                   */
     int renego_delay;           /* delay before enforcing renegotiation     */
+    int exchanges;              /* number of data exchanges                 */
     int min_version;            /* minimum protocol version accepted        */
     int max_version;            /* maximum protocol version accepted        */
     int auth_mode;              /* verify mode for connection               */
@@ -312,6 +318,8 @@ static int my_send( void *ctx, const unsigned char *buf, size_t len )
     "    renegotiation=%%d    default: 1 (enabled)\n"       \
     "    allow_legacy=%%d     default: 0 (disabled)\n"      \
     "    renegotiate=%%d      default: 0 (disabled)\n"      \
+    "    renego_delay=%%d     default: -2 (library default)\n" \
+    "    exchanges=%%d        default: 1\n"                 \
     USAGE_TICKETS                                           \
     USAGE_CACHE                                             \
     USAGE_MAX_FRAG_LEN                                      \
@@ -564,10 +572,22 @@ int psk_callback( void *p_info, ssl_context *ssl,
 }
 #endif /* POLARSSL_KEY_EXCHANGE__SOME__PSK_ENABLED */
 
+static int listen_fd;
+
+/* Interruption handler to ensure clean exit (for valgrind testing) */
+#if !defined(_WIN32)
+static int received_sigterm = 0;
+void term_handler( int sig )
+{
+    ((void) sig);
+    received_sigterm = 1;
+    net_close( listen_fd ); /* causes net_accept() to abort */
+}
+#endif
+
 int main( int argc, char *argv[] )
 {
-    int ret = 0, len, written, frags;
-    int listen_fd;
+    int ret = 0, len, written, frags, exchanges;
     int client_fd = -1;
     int version_suites[4][2];
     unsigned char buf[IO_BUF_LEN];
@@ -635,6 +655,11 @@ int main( int argc, char *argv[] )
     memset( (void *) alpn_list, 0, sizeof( alpn_list ) );
 #endif
 
+#if !defined(_WIN32)
+    /* Abort cleanly on SIGTERM */
+    signal( SIGTERM, term_handler );
+#endif
+
     if( argc == 0 )
     {
     usage:
@@ -676,6 +701,7 @@ int main( int argc, char *argv[] )
     opt.allow_legacy        = DFL_ALLOW_LEGACY;
     opt.renegotiate         = DFL_RENEGOTIATE;
     opt.renego_delay        = DFL_RENEGO_DELAY;
+    opt.exchanges           = DFL_EXCHANGES;
     opt.min_version         = DFL_MIN_VERSION;
     opt.max_version         = DFL_MAX_VERSION;
     opt.auth_mode           = DFL_AUTH_MODE;
@@ -768,6 +794,12 @@ int main( int argc, char *argv[] )
         else if( strcmp( p, "renego_delay" ) == 0 )
         {
             opt.renego_delay = atoi( q );
+        }
+        else if( strcmp( p, "exchanges" ) == 0 )
+        {
+            opt.exchanges = atoi( q );
+            if( opt.exchanges < 1 )
+                goto usage;
         }
         else if( strcmp( p, "min_version" ) == 0 )
         {
@@ -1377,6 +1409,15 @@ reset:
 
     if( ( ret = net_accept( listen_fd, &client_fd, NULL ) ) != 0 )
     {
+#if !defined(_WIN32)
+        if( received_sigterm )
+        {
+            printf( " interrupted by SIGTERM\n" );
+            ret = 0;
+            goto exit;
+        }
+#endif
+
         printf( " failed\n  ! net_accept returned -0x%x\n\n", -ret );
         goto exit;
     }
@@ -1461,6 +1502,8 @@ reset:
     }
 #endif /* POLARSSL_X509_CRT_PARSE_C */
 
+    exchanges = opt.exchanges;
+data_exchange:
     /*
      * 6. Read the HTTP Request
      */
@@ -1469,11 +1512,13 @@ reset:
 
     do
     {
+        int terminated = 0;
         len = sizeof( buf ) - 1;
         memset( buf, 0, sizeof( buf ) );
         ret = ssl_read( &ssl, buf, len );
 
-        if( ret == POLARSSL_ERR_NET_WANT_READ || ret == POLARSSL_ERR_NET_WANT_WRITE )
+        if( ret == POLARSSL_ERR_NET_WANT_READ ||
+            ret == POLARSSL_ERR_NET_WANT_WRITE )
             continue;
 
         if( ret <= 0 )
@@ -1482,18 +1527,18 @@ reset:
             {
                 case POLARSSL_ERR_SSL_PEER_CLOSE_NOTIFY:
                     printf( " connection was closed gracefully\n" );
-                    break;
+                    goto close_notify;
 
+                case 0:
                 case POLARSSL_ERR_NET_CONN_RESET:
                     printf( " connection was reset by peer\n" );
-                    break;
+                    ret = POLARSSL_ERR_NET_CONN_RESET;
+                    goto reset;
 
                 default:
                     printf( " ssl_read returned -0x%x\n", -ret );
-                    break;
+                    goto reset;
             }
-
-            break;
         }
 
         if( ssl_get_bytes_avail( &ssl ) == 0 )
@@ -1501,6 +1546,11 @@ reset:
             len = ret;
             buf[len] = '\0';
             printf( " %d bytes read\n\n%s\n", len, (char *) buf );
+
+            /* End of message should be detected according to the syntax of the
+             * application protocol (eg HTTP), just use a dummy test here. */
+            if( buf[len - 1] == '\n' )
+                terminated = 1;
         }
         else
         {
@@ -1515,7 +1565,7 @@ reset:
             {
                 printf( "  ! memory allocation failed\n" );
                 ret = 1;
-                goto exit;
+                goto reset;
             }
 
             memset( larger_buf, 0, ori_len + extra_len );
@@ -1528,7 +1578,7 @@ reset:
             {
                 printf( "  ! ssl_read failed on cached data\n" );
                 ret = 1;
-                goto exit;
+                goto reset;
             }
 
             larger_buf[ori_len + extra_len] = '\0';
@@ -1536,20 +1586,43 @@ reset:
                     ori_len + extra_len, ori_len, extra_len,
                     (char *) larger_buf );
 
+            /* End of message should be detected according to the syntax of the
+             * application protocol (eg HTTP), just use a dummy test here. */
+            if( larger_buf[ori_len + extra_len - 1] == '\n' )
+                terminated = 1;
+
             polarssl_free( larger_buf );
         }
 
-
-        if( memcmp( buf, "SERVERQUIT", 10 ) == 0 )
+        if( terminated )
         {
             ret = 0;
-            goto exit;
-        }
-
-        if( ret > 0 )
             break;
+        }
     }
     while( 1 );
+
+    /*
+     * 7a. Request renegotiation while client is waiting for input from us.
+     * (only if we're going to exhange more data afterwards)
+     */
+    if( opt.renegotiate && exchanges > 1 )
+    {
+        printf( "  . Requestion renegotiation..." );
+        fflush( stdout );
+
+        while( ( ret = ssl_renegotiate( &ssl ) ) != 0 )
+        {
+            if( ret != POLARSSL_ERR_NET_WANT_READ &&
+                ret != POLARSSL_ERR_NET_WANT_WRITE )
+            {
+                printf( " failed\n  ! ssl_renegotiate returned %d\n\n", ret );
+                goto reset;
+            }
+        }
+
+        printf( " ok\n" );
+    }
 
     /*
      * 7. Write the 200 Response
@@ -1573,7 +1646,7 @@ reset:
             if( ret != POLARSSL_ERR_NET_WANT_READ && ret != POLARSSL_ERR_NET_WANT_WRITE )
             {
                 printf( " failed\n  ! ssl_write returned %d\n\n", ret );
-                goto exit;
+                goto reset;
             }
         }
     }
@@ -1581,53 +1654,28 @@ reset:
     buf[written] = '\0';
     printf( " %d bytes written in %d fragments\n\n%s\n", written, frags, (char *) buf );
 
-    if( opt.renegotiate )
-    {
-        /*
-         * Request renegotiation (this must be done when the client is still
-         * waiting for input from our side).
-         */
-        printf( "  . Requestion renegotiation..." );
-        fflush( stdout );
-        while( ( ret = ssl_renegotiate( &ssl ) ) != 0 )
-        {
-            if( ret != POLARSSL_ERR_NET_WANT_READ &&
-                ret != POLARSSL_ERR_NET_WANT_WRITE )
-            {
-                printf( " failed\n  ! ssl_renegotiate returned %d\n\n", ret );
-                goto exit;
-            }
-        }
 
-        /*
-         * Should be a while loop, not an if, but here we're not actually
-         * expecting data from the client, and since we're running tests
-         * locally, we can just hope the handshake will finish the during the
-         * first call.
-         */
-        if( ( ret = ssl_read( &ssl, buf, 0 ) ) != 0 )
-        {
-            if( ret != POLARSSL_ERR_NET_WANT_READ &&
-                ret != POLARSSL_ERR_NET_WANT_WRITE )
-            {
-                printf( " failed\n  ! ssl_read returned %d\n\n", ret );
+    /*
+     * 7b. Continue doing data exchanges?
+     */
+    if( --exchanges > 0 )
+        goto data_exchange;
 
-                /* Unexpected message probably means client didn't renegotiate
-                 * as requested */
-                if( ret == POLARSSL_ERR_SSL_UNEXPECTED_MESSAGE )
-                    goto reset;
-                else
-                    goto exit;
-            }
-        }
-
-        printf( " ok\n" );
-    }
-
+    /*
+     * 8. Done, cleanly close the connection
+     */
+close_notify:
     printf( "  . Closing the connection..." );
 
     while( ( ret = ssl_close_notify( &ssl ) ) < 0 )
     {
+        if( ret == POLARSSL_ERR_NET_CONN_RESET )
+        {
+            printf( " ok (already closed by peer)\n" );
+            ret = 0;
+            goto reset;
+        }
+
         if( ret != POLARSSL_ERR_NET_WANT_READ &&
             ret != POLARSSL_ERR_NET_WANT_WRITE )
         {
@@ -1637,12 +1685,12 @@ reset:
     }
 
     printf( " ok\n" );
-
-    ret = 0;
     goto reset;
 
+    /*
+     * Cleanup and exit
+     */
 exit:
-
 #ifdef POLARSSL_ERROR_C
     if( ret != 0 )
     {
