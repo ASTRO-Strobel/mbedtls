@@ -3,12 +3,9 @@
  *
  * \brief X.509 generic defines and structures
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -44,6 +41,18 @@
  * \addtogroup x509_module
  * \{
  */
+
+#if !defined(POLARSSL_X509_MAX_INTERMEDIATE_CA)
+/**
+ * Maximum number of intermediate CAs in a verification chain.
+ * That is, maximum length of the chain, excluding the end-entity certificate
+ * and the trusted root certificate.
+ *
+ * Set this to a low value to prevent an adversary from making you waste
+ * resources verifying an overlong certificate chain.
+ */
+#define POLARSSL_X509_MAX_INTERMEDIATE_CA   8
+#endif
 
 /**
  * \name X509 Error codes
@@ -295,7 +304,6 @@ int x509_get_serial( unsigned char **p, const unsigned char *end,
                      x509_buf *serial );
 int x509_get_ext( unsigned char **p, const unsigned char *end,
                   x509_buf *ext, int tag );
-int x509_load_file( const char *path, unsigned char **buf, size_t *n );
 int x509_sig_alg_gets( char *buf, size_t size, const x509_buf *sig_oid,
                        pk_type_t pk_alg, md_type_t md_alg,
                        const void *sig_opts );

@@ -1,4 +1,81 @@
-PolarSSL ChangeLog (Sorted per branch, date)
+mbed TLS ChangeLog (Sorted per branch, date)
+
+= mbed TLS 1.3.10 released 2015-02-09
+Security
+   * NULL pointer dereference in the buffer-based allocator when the buffer is
+     full and polarssl_free() is called (found by Mark Hasemeyer)
+     (only possible if POLARSSL_MEMORY_BUFFER_ALLOC_C is enabled, which it is
+     not by default).
+   * Fix remotely-triggerable uninitialised pointer dereference caused by
+     crafted X.509 certificate (TLS server is not affected if it doesn't ask for a
+     client certificate) (found using Codenomicon Defensics).
+   * Fix remotely-triggerable memory leak caused by crafted X.509 certificates
+     (TLS server is not affected if it doesn't ask for a client certificate)
+     (found using Codenomicon Defensics).
+   * Fix potential stack overflow while parsing crafted X.509 certificates
+     (TLS server is not affected if it doesn't ask for a client certificate)
+     (found using Codenomicon Defensics).
+   * Fix timing difference that could theoretically lead to a
+     Bleichenbacher-style attack in the RSA and RSA-PSK key exchanges
+     (reported by Sebastian Schinzel).
+
+Features
+   * Add support for FALLBACK_SCSV (draft-ietf-tls-downgrade-scsv).
+   * Add support for Extended Master Secret (draft-ietf-tls-session-hash).
+   * Add support for Encrypt-then-MAC (RFC 7366).
+   * Add function pk_check_pair() to test if public and private keys match.
+   * Add x509_crl_parse_der().
+   * Add compile-time option POLARSSL_X509_MAX_INTERMEDIATE_CA to limit the
+     length of an X.509 verification chain.
+   * Support for renegotiation can now be disabled at compile-time
+   * Support for 1/n-1 record splitting, a countermeasure against BEAST.
+   * Certificate selection based on signature hash, prefering SHA-1 over SHA-2
+     for pre-1.2 clients when multiple certificates are available.
+   * Add support for getrandom() syscall on recent Linux kernels with Glibc or
+     a compatible enough libc (eg uClibc).
+   * Add ssl_set_arc4_support() to make it easier to disable RC4 at runtime
+     while using the default ciphersuite list.
+   * Added new error codes and debug messages about selection of
+     ciphersuite/certificate.
+
+Bugfix
+   * Stack buffer overflow if ctr_drbg_update() is called with too large
+     add_len (found by Jean-Philippe Aumasson) (not triggerable remotely).
+   * Possible buffer overflow of length at most POLARSSL_MEMORY_ALIGN_MULTIPLE
+     if memory_buffer_alloc_init() was called with buf not aligned and len not
+     a multiple of POLARSSL_MEMORY_ALIGN_MULTIPLE (not triggerable remotely).
+   * User set CFLAGS were ignored by Cmake with gcc (introduced in 1.3.9, found
+     by Julian Ospald).
+   * Fix potential undefined behaviour in Camellia.
+   * Fix potential failure in ECDSA signatures when POLARSSL_ECP_MAX_BITS is a
+     multiple of 8 (found by Gergely Budai).
+   * Fix unchecked return code in x509_crt_parse_path() on Windows (found by
+     Peter Vaskovic).
+   * Fix assembly selection for MIPS64 (thanks to James Cowgill).
+   * ssl_get_verify_result() now works even if the handshake was aborted due
+     to a failed verification (found by Fredrik Axelsson).
+   * Skip writing and parsing signature_algorithm extension if none of the
+     key exchanges enabled needs certificates. This fixes a possible interop
+     issue with some servers when a zero-length extension was sent. (Reported
+     by Peter Dettman.)
+   * On a 0-length input, base64_encode() did not correctly set output length
+     (found by Hendrik van den Boogaard).
+
+Changes
+   * Use deterministic nonces for AEAD ciphers in TLS by default (possible to
+     switch back to random with POLARSSL_SSL_AEAD_RANDOM_IV in config.h).
+   * Blind RSA private operations even when POLARSSL_RSA_NO_CRT is defined.
+   * ssl_set_own_cert() now returns an error on key-certificate mismatch.
+   * Forbid repeated extensions in X.509 certificates.
+   * debug_print_buf() now prints a text view in addition to hexadecimal.
+   * A specific error is now returned when there are ciphersuites in common
+     but none of them is usable due to external factors such as no certificate
+     with a suitable (extended)KeyUsage or curve or no PSK set.
+   * It is now possible to disable negotiation of truncated HMAC server-side
+     at runtime with ssl_set_truncated_hmac().
+   * Example programs for SSL client and server now disable SSLv3 by default.
+   * Example programs for SSL client and server now disable RC4 by default.
+   * Use platform.h in all test suites and programs.
 
 = PolarSSL 1.3.9 released 2014-10-20
 Security
@@ -426,6 +503,33 @@ Bugfix
 Security
    * RSA blinding on CRT operations to counter timing attacks
      (found by Cyril Arnaud and Pierre-Alain Fouque)
+
+= Version 1.2.12 released 2014-10-24
+
+Security
+   * Remotely-triggerable memory leak when parsing some X.509 certificates
+     (server is not affected if it doesn't ask for a client certificate).
+     (Found using Codenomicon Defensics.)
+
+Bugfix
+   * Fix potential bad read in parsing ServerHello (found by Adrien
+     Vialletelle).
+   * ssl_close_notify() could send more than one message in some circumstances
+     with non-blocking I/O.
+   * x509_crt_parse() did not increase total_failed on PEM error
+   * Fix compiler warnings on iOS (found by Sander Niemeijer).
+   * Don't print uninitialised buffer in ssl_mail_client (found by Marc Abel).
+   * Fix net_accept() regarding non-blocking sockets (found by Luca Pesce).
+   * ssl_read() could return non-application data records on server while
+     renegotation was pending, and on client when a HelloRequest was received.
+   * Fix warnings from Clang's scan-build (contributed by Alfred Klomp).
+
+Changes
+   * X.509 certificates with more than one AttributeTypeAndValue per
+     RelativeDistinguishedName are not accepted any more.
+   * ssl_read() now returns POLARSSL_ERR_NET_WANT_READ rather than
+     POLARSSL_ERR_SSL_UNEXPECTED_MESSAGE on harmless alerts.
+   * Accept spaces at end of line or end of buffer in base64_decode().
 
 = Version 1.2.11 released 2014-07-11
 Features

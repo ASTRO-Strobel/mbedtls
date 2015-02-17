@@ -1,12 +1,9 @@
 /*
  *  Error message information
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -175,7 +172,7 @@
 #include "polarssl/xtea.h"
 #endif
 
-
+#include <stdio.h>
 #include <string.h>
 
 #if defined(_MSC_VER) && !defined  snprintf && !defined(EFIX64) && \
@@ -386,7 +383,7 @@ void polarssl_strerror( int ret, char *buf, size_t buflen )
         if( use_ret == -(POLARSSL_ERR_SSL_NO_CLIENT_CERTIFICATE) )
             snprintf( buf, buflen, "SSL - No client certification received from the client, but required by the authentication mode" );
         if( use_ret == -(POLARSSL_ERR_SSL_CERTIFICATE_TOO_LARGE) )
-            snprintf( buf, buflen, "SSL - DESCRIPTION MISSING" );
+            snprintf( buf, buflen, "SSL - Our own certificate(s) is/are too large to send in an SSL message" );
         if( use_ret == -(POLARSSL_ERR_SSL_CERTIFICATE_REQUIRED) )
             snprintf( buf, buflen, "SSL - The own certificate is not set, but needed by the server" );
         if( use_ret == -(POLARSSL_ERR_SSL_PRIVATE_KEY_REQUIRED) )
@@ -452,6 +449,8 @@ void polarssl_strerror( int ret, char *buf, size_t buflen )
             snprintf( buf, buflen, "SSL - A counter would wrap (eg, too many messages exchanged)" );
         if( use_ret == -(POLARSSL_ERR_SSL_WAITING_SERVER_HELLO_RENEGO) )
             snprintf( buf, buflen, "SSL - Unexpected message at ServerHello in renegotiation" );
+        if( use_ret == -(POLARSSL_ERR_SSL_NO_USABLE_CIPHERSUITE) )
+            snprintf( buf, buflen, "SSL - None of the common ciphersuites is usable (eg, no suitable certificate, see debug messages)" );
 #endif /* POLARSSL_SSL_TLS_C */
 
 #if defined(POLARSSL_X509_USE_C) || defined(POLARSSL_X509_CREATE_C)

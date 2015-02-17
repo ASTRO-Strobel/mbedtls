@@ -1,12 +1,9 @@
 /*
  *  Public Key layer for parsing key files and structures
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -71,7 +68,7 @@ static void polarssl_zeroize( void *v, size_t n ) {
 /*
  * Load all data from a file into a given buffer.
  */
-static int load_file( const char *path, unsigned char **buf, size_t *n )
+int pk_load_file( const char *path, unsigned char **buf, size_t *n )
 {
     FILE *f;
     long size;
@@ -120,7 +117,7 @@ int pk_parse_keyfile( pk_context *ctx,
     size_t n;
     unsigned char *buf;
 
-    if( ( ret = load_file( path, &buf, &n ) ) != 0 )
+    if( ( ret = pk_load_file( path, &buf, &n ) ) != 0 )
         return( ret );
 
     if( pwd == NULL )
@@ -144,7 +141,7 @@ int pk_parse_public_keyfile( pk_context *ctx, const char *path )
     size_t n;
     unsigned char *buf;
 
-    if( ( ret = load_file( path, &buf, &n ) ) != 0 )
+    if( ( ret = pk_load_file( path, &buf, &n ) ) != 0 )
         return( ret );
 
     ret = pk_parse_public_key( ctx, buf, n );

@@ -3,12 +3,9 @@
  *
  * \brief Consistency checks for configuration options
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -159,6 +156,10 @@
 #error "POLARSSL_KEY_EXCHANGE_RSA_ENABLED defined, but not all prerequisites"
 #endif
 
+#if defined(POLARSSL_MEMORY_C) && !defined(POLARSSL_PLATFORM_C)
+#error "POLARSSL_MEMORY_C defined, but not all prerequisites"
+#endif
+
 #if defined(POLARSSL_MEMORY_BUFFER_ALLOC_C) &&                          \
     ( !defined(POLARSSL_PLATFORM_C) || !defined(POLARSSL_PLATFORM_MEMORY) )
 #error "POLARSSL_MEMORY_BUFFER_ALLOC_C defined, but not all prerequisites"
@@ -178,6 +179,11 @@
 
 #if defined(POLARSSL_PEM_WRITE_C) && !defined(POLARSSL_BASE64_C)
 #error "POLARSSL_PEM_WRITE_C defined, but not all prerequisites"
+#endif
+
+#if defined(POLARSSL_PK_C) && \
+    ( !defined(POLARSSL_RSA_C) && !defined(POLARSSL_ECP_C) )
+#error "POLARSSL_PK_C defined, but not all prerequisites"
 #endif
 
 #if defined(POLARSSL_PK_PARSE_C) && !defined(POLARSSL_PK_C)
@@ -257,10 +263,29 @@
 #error "Illegal protocol selection"
 #endif
 
+#if defined(POLARSSL_SSL_ENCRYPT_THEN_MAC) &&   \
+    !defined(POLARSSL_SSL_PROTO_TLS1)   &&      \
+    !defined(POLARSSL_SSL_PROTO_TLS1_1) &&      \
+    !defined(POLARSSL_SSL_PROTO_TLS1_2)
+#error "POLARSSL_SSL_ENCRYPT_THEN_MAC defined, but not all prerequsites"
+#endif
+
+#if defined(POLARSSL_SSL_EXTENDED_MASTER_SECRET) && \
+    !defined(POLARSSL_SSL_PROTO_TLS1)   &&          \
+    !defined(POLARSSL_SSL_PROTO_TLS1_1) &&          \
+    !defined(POLARSSL_SSL_PROTO_TLS1_2)
+#error "POLARSSL_SSL_EXTENDED_MASTER_SECRET defined, but not all prerequsites"
+#endif
+
 #if defined(POLARSSL_SSL_SESSION_TICKETS) && defined(POLARSSL_SSL_TLS_C) && \
     ( !defined(POLARSSL_AES_C) || !defined(POLARSSL_SHA256_C) ||            \
       !defined(POLARSSL_CIPHER_MODE_CBC) )
 #error "POLARSSL_SSL_SESSION_TICKETS_C defined, but not all prerequisites"
+#endif
+
+#if defined(POLARSSL_SSL_CBC_RECORD_SPLITTING) && \
+    !defined(POLARSSL_SSL_PROTO_SSL3) && !defined(POLARSSL_SSL_PROTO_TLS1)
+#error "POLARSSL_SSL_CBC_RECORD_SPLITTING defined, but not all prerequisites"
 #endif
 
 #if defined(POLARSSL_SSL_SERVER_NAME_INDICATION) && \

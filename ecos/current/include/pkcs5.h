@@ -5,12 +5,9 @@
  *
  * \author Mathias Olsson <mathias@kompetensum.com>
  *
- *  Copyright (C) 2006-2013, Brainspark B.V.
+ *  Copyright (C) 2006-2013, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -64,7 +61,7 @@ extern "C" {
  * \param datalen    length of data
  * \param output     output buffer
  *
- * \returns        0 on success, or a PolarSSL error code if verification fails.
+ * \returns        0 on success, or a POLARSSL_ERR_xxx code if verification fails.
  */
 int pkcs5_pbes2( asn1_buf *pbe_params, int mode,
                  const unsigned char *pwd,  size_t pwdlen,
@@ -83,7 +80,7 @@ int pkcs5_pbes2( asn1_buf *pbe_params, int mode,
  * \param key_length            Length of generated key
  * \param output   Generated key. Must be at least as big as key_length
  *
- * \returns        0 on success, or a PolarSSL error code if verification fails.
+ * \returns        0 on success, or a POLARSSL_ERR_xxx code if verification fails.
  */
 int pkcs5_pbkdf2_hmac( md_context_t *ctx, const unsigned char *password,
                        size_t plen, const unsigned char *salt, size_t slen,

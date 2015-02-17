@@ -6,10 +6,11 @@ use warnings;
 use strict;
 
 my $usage = <<EOU;
-$0 [-f <file>] full
 $0 [-f <file>] unset <name>
 $0 [-f <file>] set <name> [<value>]
 EOU
+# for our eyes only:
+# $0 [-f <file>] full
 
 # Things that shouldn't be enabled with "full".
 # Notes:
@@ -27,6 +28,7 @@ POLARSSL_ECP_DP_M511_ENABLED
 POLARSSL_NO_DEFAULT_ENTROPY_SOURCES
 POLARSSL_NO_PLATFORM_ENTROPY
 POLARSSL_SSL_HW_RECORD_ACCEL
+POLARSSL_SSL_DISABLE_RENEGOTIATION
 POLARSSL_X509_ALLOW_EXTENSIONS_NON_V3
 POLARSSL_X509_ALLOW_UNSUPPORTED_CRITICAL_EXTENSION
 POLARSSL_ZLIB_SUPPORT

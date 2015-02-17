@@ -1,12 +1,9 @@
 /*
  *  RIPE MD-160 implementation
  *
- *  Copyright (C) 2014-2014, Brainspark B.V.
+ *  Copyright (C) 2014-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -67,12 +64,12 @@
 #endif
 
 #ifndef PUT_UINT32_LE
-#define PUT_UINT32_LE(n,b,i)                            \
-{                                                       \
-    (b)[(i)    ] = (unsigned char) ( (n)       );       \
-    (b)[(i) + 1] = (unsigned char) ( (n) >>  8 );       \
-    (b)[(i) + 2] = (unsigned char) ( (n) >> 16 );       \
-    (b)[(i) + 3] = (unsigned char) ( (n) >> 24 );       \
+#define PUT_UINT32_LE(n,b,i)                                    \
+{                                                               \
+    (b)[(i)    ] = (unsigned char) ( ( (n)       ) & 0xFF );    \
+    (b)[(i) + 1] = (unsigned char) ( ( (n) >>  8 ) & 0xFF );    \
+    (b)[(i) + 2] = (unsigned char) ( ( (n) >> 16 ) & 0xFF );    \
+    (b)[(i) + 3] = (unsigned char) ( ( (n) >> 24 ) & 0xFF );    \
 }
 #endif
 

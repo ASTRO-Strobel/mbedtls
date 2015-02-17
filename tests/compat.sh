@@ -26,14 +26,19 @@ SRVMEM=0
 
 # do we have a recent enough GnuTLS?
 if ( which $GNUTLS_CLI && which $GNUTLS_SERV ) >/dev/null; then
-    eval $( $GNUTLS_CLI --version | head -n1 | sed 's/.* \([0-9]*\)\.\([0-9]\)*\.\([0-9]*\)$/MAJOR="\1" MINOR="\2" PATCH="\3"/' )
-    if [ $MAJOR -lt 3 -o \
-        \( $MAJOR -eq 3 -a $MINOR -lt 2 \) -o \
-        \( $MAJOR -eq 3 -a $MINOR -eq 2 -a $PATCH -lt 15 \) ]
-    then
-        PEER_GNUTLS=""
-    else
+    G_VER="$( $GNUTLS_CLI --version | head -n1 )"
+    if echo "$G_VER" | grep '@VERSION@' > /dev/null; then # git version
         PEER_GNUTLS=" GnuTLS"
+    else
+        eval $( echo $G_VER | sed 's/.* \([0-9]*\)\.\([0-9]\)*\.\([0-9]*\)$/MAJOR="\1" MINOR="\2" PATCH="\3"/' )
+        if [ $MAJOR -lt 3 -o \
+            \( $MAJOR -eq 3 -a $MINOR -lt 2 \) -o \
+            \( $MAJOR -eq 3 -a $MINOR -eq 2 -a $PATCH -lt 15 \) ]
+        then
+            PEER_GNUTLS=""
+        else
+            PEER_GNUTLS=" GnuTLS"
+        fi
     fi
 else
     PEER_GNUTLS=""
@@ -44,23 +49,23 @@ MODES="ssl3 tls1 tls1_1 tls1_2"
 VERIFIES="NO YES"
 TYPES="ECDSA RSA PSK"
 FILTER=""
-EXCLUDE='NULL\|DES-CBC-' # avoid plain DES but keep 3DES-EDE-CBC (PolarSSL), DES-CBC3 (OpenSSL)
+EXCLUDE='NULL\|DES-CBC-' # avoid plain DES but keep 3DES-EDE-CBC (mbedTLS), DES-CBC3 (OpenSSL)
 VERBOSE=""
 MEMCHECK=0
-PEERS="OpenSSL$PEER_GNUTLS PolarSSL"
+PEERS="OpenSSL$PEER_GNUTLS mbedTLS"
 
 print_usage() {
     echo "Usage: $0"
-    echo -e "  -h|--help\tPrint this help."
-    echo -e "  -f|--filter\tOnly matching ciphersuites are tested (Default: '$FILTER')"
-    echo -e "  -e|--exclude\tMatching ciphersuites are excluded (Default: '$EXCLUDE')"
-    echo -e "  -m|--modes\tWhich modes to perform (Default: '$MODES')"
-    echo -e "  -t|--types\tWhich key exchange type to perform (Default: '$TYPES')"
-    echo -e "  -V|--verify\tWhich verification modes to perform (Default: '$VERIFIES')"
-    echo -e "  -p|--peers\tWhich peers to use (Default: '$PEERS')"
-    echo -e "            \tAlso available: GnuTLS (needs v3.2.15 or higher)"
-    echo -e "  -M|--memcheck\tCheck memory leaks and errors."
-    echo -e "  -v|--verbose\tSet verbose output."
+    printf "  -h|--help\tPrint this help.\n"
+    printf "  -f|--filter\tOnly matching ciphersuites are tested (Default: '$FILTER')\n"
+    printf "  -e|--exclude\tMatching ciphersuites are excluded (Default: '$EXCLUDE')\n"
+    printf "  -m|--modes\tWhich modes to perform (Default: '$MODES')\n"
+    printf "  -t|--types\tWhich key exchange type to perform (Default: '$TYPES')\n"
+    printf "  -V|--verify\tWhich verification modes to perform (Default: '$VERIFIES')\n"
+    printf "  -p|--peers\tWhich peers to use (Default: '$PEERS')\n"
+    printf "            \tAlso available: GnuTLS (needs v3.2.15 or higher)\n"
+    printf "  -M|--memcheck\tCheck memory leaks and errors.\n"
+    printf "  -v|--verbose\tSet verbose output.\n"
 }
 
 get_options() {
@@ -102,6 +107,10 @@ get_options() {
         esac
         shift
     done
+
+    # sanitize some options (modes checked later)
+    VERIFIES="$( echo $VERIFIES | tr [a-z] [A-Z] )"
+    TYPES="$( echo $TYPES | tr [a-z] [A-Z] )"
 }
 
 log() {
@@ -121,7 +130,7 @@ filter()
   done
 
   # normalize whitespace
-  echo "$NEW_LIST" | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //' -e 's/ $//'
+  echo "$NEW_LIST" | sed -e 's/[[:space:]][[:space:]]*/ /g' -e 's/^ //' -e 's/ $//'
 }
 
 filter_ciphersuites()
@@ -667,7 +676,7 @@ setup_arguments()
             exit 1;
     esac
 
-    P_SERVER_ARGS="server_port=$PORT server_addr=0.0.0.0 force_version=$MODE"
+    P_SERVER_ARGS="server_port=$PORT server_addr=0.0.0.0 force_version=$MODE arc4=1"
     O_SERVER_ARGS="-accept $PORT -www -cipher NULL,ALL -$MODE"
     G_SERVER_ARGS="-p $PORT --http"
     G_SERVER_PRIO="EXPORT:+NULL:+MD5:+PSK:+DHE-PSK:+ECDHE-PSK:+RSA-PSK:-VERS-TLS-ALL:$G_PRIO_MODE"
@@ -765,7 +774,7 @@ start_server() {
         [Gg]nu*)
             SERVER_CMD="$GNUTLS_SERV $G_SERVER_ARGS --priority $G_SERVER_PRIO"
             ;;
-        [Pp]olar*)
+        mbed*)
             SERVER_CMD="$P_SRV $P_SERVER_ARGS"
             if [ "$MEMCHECK" -gt 0 ]; then
                 SERVER_CMD="valgrind --leak-check=full $SERVER_CMD"
@@ -834,9 +843,9 @@ run_client() {
     VERIF=$(echo $VERIFY | tr '[:upper:]' '[:lower:]')
     TITLE="`echo $1 | head -c1`->`echo $SERVER_NAME | head -c1`"
     TITLE="$TITLE $MODE,$VERIF $2"
-    echo -n "$TITLE "
+    printf "$TITLE "
     LEN=$(( 72 - `echo "$TITLE" | wc -c` ))
-    for i in `seq 1 $LEN`; do echo -n '.'; done; echo -n ' '
+    for i in `seq 1 $LEN`; do printf '.'; done; printf ' '
 
     # run the command and interpret result
     case $1 in
@@ -880,7 +889,7 @@ run_client() {
             fi
             ;;
 
-        [Pp]olar*)
+        mbed*)
             CLIENT_CMD="$P_CLI $P_CLIENT_ARGS force_ciphersuite=$2"
             if [ "$MEMCHECK" -gt 0 ]; then
                 CLIENT_CMD="valgrind --leak-check=full $CLIENT_CMD"
@@ -976,7 +985,7 @@ fi
 
 for PEER in $PEERS; do
     case "$PEER" in
-        [Pp]olar*|[Oo]pen*|[Gg]nu*)
+        mbed*|[Oo]pen*|[Gg]nu*)
             ;;
         *)
             echo "Unknown peers: $PEER" >&2
@@ -1020,13 +1029,13 @@ for VERIFY in $VERIFIES; do
                     if [ "X" != "X$P_CIPHERS" ]; then
                         start_server "OpenSSL"
                         for i in $P_CIPHERS; do
-                            run_client PolarSSL $i
+                            run_client mbedTLS $i
                         done
                         stop_server
                     fi
 
                     if [ "X" != "X$O_CIPHERS" ]; then
-                        start_server "PolarSSL"
+                        start_server "mbedTLS"
                         for i in $O_CIPHERS; do
                             run_client OpenSSL $i
                         done
@@ -1045,13 +1054,13 @@ for VERIFY in $VERIFIES; do
                     if [ "X" != "X$P_CIPHERS" ]; then
                         start_server "GnuTLS"
                         for i in $P_CIPHERS; do
-                            run_client PolarSSL $i
+                            run_client mbedTLS $i
                         done
                         stop_server
                     fi
 
                     if [ "X" != "X$G_CIPHERS" ]; then
-                        start_server "PolarSSL"
+                        start_server "mbedTLS"
                         for i in $G_CIPHERS; do
                             run_client GnuTLS $i
                         done
@@ -1060,7 +1069,7 @@ for VERIFY in $VERIFIES; do
 
                     ;;
 
-                [Pp]olar*)
+                mbed*)
 
                     reset_ciphersuites
                     add_common_ciphersuites
@@ -1070,9 +1079,9 @@ for VERIFY in $VERIFIES; do
                     filter_ciphersuites
 
                     if [ "X" != "X$P_CIPHERS" ]; then
-                        start_server "PolarSSL"
+                        start_server "mbedTLS"
                         for i in $P_CIPHERS; do
-                            run_client PolarSSL $i
+                            run_client mbedTLS $i
                         done
                         stop_server
                     fi
@@ -1095,9 +1104,9 @@ echo "------------------------------------------------------------------------"
 
 if [ $FAILED -ne 0 -o $SRVMEM -ne 0 ];
 then
-    echo -n "FAILED"
+    printf "FAILED"
 else
-    echo -n "PASSED"
+    printf "PASSED"
 fi
 
 if [ "$MEMCHECK" -gt 0 ]; then

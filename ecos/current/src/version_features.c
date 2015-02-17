@@ -1,12 +1,9 @@
 /*
  *  Version feature information
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -273,15 +270,33 @@ const char *features[] = {
 #if defined(POLARSSL_SELF_TEST)
     "POLARSSL_SELF_TEST",
 #endif /* POLARSSL_SELF_TEST */
+#if defined(POLARSSL_SSL_AEAD_RANDOM_IV)
+    "POLARSSL_SSL_AEAD_RANDOM_IV",
+#endif /* POLARSSL_SSL_AEAD_RANDOM_IV */
 #if defined(POLARSSL_SSL_ALERT_MESSAGES)
     "POLARSSL_SSL_ALERT_MESSAGES",
 #endif /* POLARSSL_SSL_ALERT_MESSAGES */
 #if defined(POLARSSL_SSL_DEBUG_ALL)
     "POLARSSL_SSL_DEBUG_ALL",
 #endif /* POLARSSL_SSL_DEBUG_ALL */
+#if defined(POLARSSL_SSL_ENCRYPT_THEN_MAC)
+    "POLARSSL_SSL_ENCRYPT_THEN_MAC",
+#endif /* POLARSSL_SSL_ENCRYPT_THEN_MAC */
+#if defined(POLARSSL_SSL_EXTENDED_MASTER_SECRET)
+    "POLARSSL_SSL_EXTENDED_MASTER_SECRET",
+#endif /* POLARSSL_SSL_EXTENDED_MASTER_SECRET */
+#if defined(POLARSSL_SSL_FALLBACK_SCSV)
+    "POLARSSL_SSL_FALLBACK_SCSV",
+#endif /* POLARSSL_SSL_FALLBACK_SCSV */
 #if defined(POLARSSL_SSL_HW_RECORD_ACCEL)
     "POLARSSL_SSL_HW_RECORD_ACCEL",
 #endif /* POLARSSL_SSL_HW_RECORD_ACCEL */
+#if defined(POLARSSL_SSL_CBC_RECORD_SPLITTING)
+    "POLARSSL_SSL_CBC_RECORD_SPLITTING",
+#endif /* POLARSSL_SSL_CBC_RECORD_SPLITTING */
+#if defined(POLARSSL_SSL_DISABLE_RENEGOTIATION)
+    "POLARSSL_SSL_DISABLE_RENEGOTIATION",
+#endif /* POLARSSL_SSL_DISABLE_RENEGOTIATION */
 #if defined(POLARSSL_SSL_SRV_SUPPORT_SSLV2_CLIENT_HELLO)
     "POLARSSL_SSL_SRV_SUPPORT_SSLV2_CLIENT_HELLO",
 #endif /* POLARSSL_SSL_SRV_SUPPORT_SSLV2_CLIENT_HELLO */

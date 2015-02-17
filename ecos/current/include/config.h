@@ -3,12 +3,9 @@
  *
  * \brief Configuration options (set of defines)
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -122,7 +119,7 @@
  *
  * Enable the memory allocation layer.
  *
- * By default PolarSSL uses the system-provided malloc() and free().
+ * By default mbed TLS uses the system-provided malloc() and free().
  * This allows different allocators (self-implemented or provided) to be
  * provided to the platform abstraction layer.
  *
@@ -156,10 +153,10 @@
 /**
  * \def POLARSSL_PLATFORM_XXX_ALT
  *
- * Uncomment a macro to let PolarSSL support the function in the platform
+ * Uncomment a macro to let mbed TLS support the function in the platform
  * abstraction layer.
  *
- * Example: In case you uncomment POLARSSL_PLATFORM_PRINTF_ALT, PolarSSL will
+ * Example: In case you uncomment POLARSSL_PLATFORM_PRINTF_ALT, mbed TLS will
  * provide a function "platform_set_printf()" that allows you to set an
  * alternative printf function pointer.
  *
@@ -173,7 +170,7 @@
 /* \} name SECTION: System support */
 
 /**
- * \name SECTION: PolarSSL feature support
+ * \name SECTION: mbed TLS feature support
  *
  * This section sets support for features that are or are not needed
  * within the modules that are enabled.
@@ -196,12 +193,12 @@
 /**
  * \def POLARSSL_XXX_ALT
  *
- * Uncomment a macro to let PolarSSL use your alternate core implementation of
+ * Uncomment a macro to let mbed TLS use your alternate core implementation of
  * a symmetric or hash algorithm (e.g. platform specific assembly optimized
  * implementations). Keep in mind that the function prototypes should remain
  * the same.
  *
- * Example: In case you uncomment POLARSSL_AES_ALT, PolarSSL will no longer
+ * Example: In case you uncomment POLARSSL_AES_ALT, mbed TLS will no longer
  * provide the "struct aes_context" definition and omit the base function
  * declarations and implementations. "aes_alt.h" will be included from
  * "aes.h" to include the new function definitions.
@@ -785,10 +782,22 @@
 #define POLARSSL_SELF_TEST
 
 /**
+ * \def POLARSSL_SSL_AEAD_RANDOM_IV
+ *
+ * Generate a random IV rather than using the record sequence number as a
+ * nonce for ciphersuites using and AEAD algorithm (GCM or CCM).
+ *
+ * Using the sequence number is generally recommended.
+ *
+ * Uncomment this macro to always use random IVs with AEAD ciphersuites.
+ */
+//#define POLARSSL_SSL_AEAD_RANDOM_IV
+
+/**
  * \def POLARSSL_SSL_ALL_ALERT_MESSAGES
  *
  * Enable sending of alert messages in case of encountered errors as per RFC.
- * If you choose not to send the alert messages, PolarSSL can still communicate
+ * If you choose not to send the alert messages, mbed TLS can still communicate
  * with other servers, only debugging of failures is harder.
  *
  * The advantage of not sending alert messages, is that no information is given
@@ -816,6 +825,59 @@
 #define POLARSSL_SSL_DEBUG_ALL
 #endif
 
+/** \def POLARSSL_SSL_ENCRYPT_THEN_MAC
+ *
+ * Enable support for Encrypt-then-MAC, RFC 7366.
+ *
+ * This allows peers that both support it to use a more robust protection for
+ * ciphersuites using CBC, providing deep resistance against timing attacks
+ * on the padding or underlying cipher.
+ *
+ * This only affects CBC ciphersuites, and is useless if none is defined.
+ *
+ * Requires: POLARSSL_SSL_PROTO_TLS1    or
+ *           POLARSSL_SSL_PROTO_TLS1_1  or
+ *           POLARSSL_SSL_PROTO_TLS1_2
+ *
+ * Comment this macro to disable support for Encrypt-then-MAC
+ */
+#define POLARSSL_SSL_ENCRYPT_THEN_MAC
+
+/** \def POLARSSL_SSL_EXTENDED_MASTER_SECRET
+ *
+ * Enable support for Extended Master Secret, aka Session Hash
+ * (draft-ietf-tls-session-hash-02).
+ *
+ * This was introduced as "the proper fix" to the Triple Handshake familiy of
+ * attacks, but it is recommended to always use it (even if you disable
+ * renegotiation), since it actually fixes a more fundamental issue in the
+ * original SSL/TLS design, and has implications beyond Triple Handshake.
+ *
+ * Requires: POLARSSL_SSL_PROTO_TLS1    or
+ *           POLARSSL_SSL_PROTO_TLS1_1  or
+ *           POLARSSL_SSL_PROTO_TLS1_2
+ *
+ * Comment this macro to disable support for Extended Master Secret.
+ */
+#define POLARSSL_SSL_EXTENDED_MASTER_SECRET
+
+/**
+ * \def POLARSSL_SSL_FALLBACK_SCSV
+ *
+ * Enable support for FALLBACK_SCSV (draft-ietf-tls-downgrade-scsv-00).
+ *
+ * For servers, it is recommended to always enable this, unless you support
+ * only one version of TLS, or know for sure that none of your clients
+ * implements a fallback strategy.
+ *
+ * For clients, you only need this if you're using a fallback strategy, which
+ * is not recommended in the first place, unless you absolutely need it to
+ * interoperate with buggy (version-intolerant) servers.
+ *
+ * Comment this macro to disable support for FALLBACK_SCSV
+ */
+#define POLARSSL_SSL_FALLBACK_SCSV
+
 /**
  * \def POLARSSL_SSL_HW_RECORD_ACCEL
  *
@@ -825,6 +887,36 @@
  * Uncomment this macro to enable hooking functions.
  */
 //#define POLARSSL_SSL_HW_RECORD_ACCEL
+
+/**
+ * \def POLARSSL_SSL_CBC_RECORD_SPLITTING
+ *
+ * Enable 1/n-1 record splitting for CBC mode in SSLv3 and TLS 1.0.
+ *
+ * This is a countermeasure to the BEAST attack, which also minimizes the risk
+ * of interoperability issues compared to sending 0-length records.
+ *
+ * Comment this macro to disable 1/n-1 record splitting.
+ */
+#define POLARSSL_SSL_CBC_RECORD_SPLITTING
+
+/**
+ * \def POLARSSL_SSL_DISABLE_RENEGOTIATION
+ *
+ * Disable support for TLS renegotiation.
+ *
+ * The two main uses of renegotiation are (1) refresh keys on long-lived
+ * connections and (2) client authentication after the initial handshake.
+ * If you don't need renegotiation, it's probably better to disable it, since
+ * it has been associated with security issues in the past and is easy to
+ * misuse/misunderstand.
+ *
+ * Warning: in the next stable branch, this switch will be replaced by
+ * POLARSSL_SSL_RENEGOTIATION to enable support for renegotiation.
+ *
+ * Uncomment this to disable support for renegotiation.
+ */
+//#define POLARSSL_SSL_DISABLE_RENEGOTIATION
 
 /**
  * \def POLARSSL_SSL_SRV_SUPPORT_SSLV2_CLIENT_HELLO
@@ -906,8 +998,7 @@
 /**
  * \def POLARSSL_SSL_ALPN
  *
- * Enable support for Application Layer Protocol Negotiation.
- * draft-ietf-tls-applayerprotoneg-05
+ * Enable support for RFC 7301 Application Layer Protocol Negotiation.
  *
  * Comment this macro to disable support for ALPN.
  */
@@ -930,6 +1021,8 @@
  * \def POLARSSL_SSL_SERVER_NAME_INDICATION
  *
  * Enable support for RFC 6066 server name indication (SNI) in SSL.
+ *
+ * Requires: POLARSSL_X509_CRT_PARSE_C
  *
  * Comment this macro to disable support for server name indication in SSL
  */
@@ -1069,12 +1162,12 @@
  * Uncomment to enable use of ZLIB
  */
 //#define POLARSSL_ZLIB_SUPPORT
-/* \} name SECTION: PolarSSL feature support */
+/* \} name SECTION: mbed TLS feature support */
 
 /**
- * \name SECTION: PolarSSL modules
+ * \name SECTION: mbed TLS modules
  *
- * This section enables or disables entire modules in PolarSSL
+ * This section enables or disables entire modules in mbed TLS
  * \{
  */
 
@@ -1595,6 +1688,7 @@
 /**
  * \def POLARSSL_MEMORY_C
  * Deprecated since 1.3.5. Please use POLARSSL_PLATFORM_MEMORY instead.
+ * Depends on: POLARSSL_PLATFORM_C
  */
 //#define POLARSSL_MEMORY_C
 
@@ -1608,7 +1702,7 @@
  * Module:  library/memory_buffer_alloc.c
  *
  * Requires: POLARSSL_PLATFORM_C
- *           POLARSSL_PLATFORM_MEMORY (to use it within PolarSSL)
+ *           POLARSSL_PLATFORM_MEMORY (to use it within mbed TLS)
  *
  * Enable this module to enable the buffer memory allocator.
  */
@@ -1951,7 +2045,7 @@
  * \def POLARSSL_THREADING_C
  *
  * Enable the threading abstraction layer.
- * By default PolarSSL assumes it is used in a non-threaded environment or that
+ * By default mbed TLS assumes it is used in a non-threaded environment or that
  * contexts are not shared between threads. If you do intend to use contexts
  * between threads, you will need to enable this layer to prevent race
  * conditions.
@@ -1964,7 +2058,7 @@
  * You will have to enable either POLARSSL_THREADING_ALT or
  * POLARSSL_THREADING_PTHREAD.
  *
- * Enable this layer to allow use of mutexes within PolarSSL
+ * Enable this layer to allow use of mutexes within mbed TLS
  */
 #define POLARSSL_THREADING_C
 
@@ -2101,7 +2195,7 @@
  */
 //#define POLARSSL_XTEA_C
 
-/* \} name SECTION: PolarSSL modules */
+/* \} name SECTION: mbed TLS modules */
 
 /**
  * \name SECTION: Module configuration options
@@ -2179,6 +2273,9 @@
 
 /* Debug options */
 #define POLARSSL_DEBUG_DFL_MODE POLARSSL_DEBUG_LOG_RAW /**< Default log: Full or Raw */
+
+/* X509 options */
+//#define POLARSSL_X509_MAX_INTERMEDIATE_CA   8   /**< Maximum number of intermediate CAs in a verification chain. */
 
 /* \} name SECTION: Module configuration options */
 

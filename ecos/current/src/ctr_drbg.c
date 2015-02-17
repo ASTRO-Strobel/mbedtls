@@ -1,12 +1,9 @@
 /*
  *  CTR_DRBG implementation based on AES-256 (NIST SP 800-90)
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -137,6 +134,9 @@ static int block_cipher_df( unsigned char *output,
     int i, j;
     size_t buf_len, use_len;
 
+    if( data_len > CTR_DRBG_MAX_SEED_INPUT )
+        return( POLARSSL_ERR_CTR_DRBG_INPUT_TOO_BIG );
+
     memset( buf, 0, CTR_DRBG_MAX_SEED_INPUT + CTR_DRBG_BLOCKSIZE + 16 );
     aes_init( &aes_ctx );
 
@@ -256,6 +256,11 @@ void ctr_drbg_update( ctr_drbg_context *ctx,
 
     if( add_len > 0 )
     {
+        /* MAX_INPUT would be more logical here, but we have to match
+         * block_cipher_df()'s limits since we can't propagate errors */
+        if( add_len > CTR_DRBG_MAX_SEED_INPUT )
+            add_len = CTR_DRBG_MAX_SEED_INPUT;
+
         block_cipher_df( add_input, additional, add_len );
         ctr_drbg_update_internal( ctx, add_input );
     }

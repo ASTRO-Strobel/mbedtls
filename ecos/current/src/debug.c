@@ -1,12 +1,9 @@
 /*
  *  Debugging routines
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -35,10 +32,7 @@
 
 #include <stdarg.h>
 #include <stdlib.h>
-
-#if defined(EFIX64) || defined(EFI32)
 #include <stdio.h>
-#endif
 
 #if defined(_MSC_VER) && !defined(EFIX64) && !defined(EFI32)
 #if !defined  snprintf
@@ -123,6 +117,7 @@ void debug_print_buf( const ssl_context *ssl, int level,
                       unsigned char *buf, size_t len )
 {
     char str[512];
+    char txt[17];
     size_t i, maxlen = sizeof( str ) - 1, idx = 0;
 
     if( ssl->f_dbg == NULL || level > debug_threshold )
@@ -138,6 +133,7 @@ void debug_print_buf( const ssl_context *ssl, int level,
     ssl->f_dbg( ssl->p_dbg, level, str );
 
     idx = 0;
+    memset( txt, 0, sizeof( txt ) );
     for( i = 0; i < len; i++ )
     {
         if( i >= 4096 )
@@ -147,9 +143,11 @@ void debug_print_buf( const ssl_context *ssl, int level,
         {
             if( i > 0 )
             {
-                snprintf( str + idx, maxlen - idx, "\n" );
+                snprintf( str + idx, maxlen - idx, "  %s\n", txt );
                 ssl->f_dbg( ssl->p_dbg, level, str );
+
                 idx = 0;
+                memset( txt, 0, sizeof( txt ) );
             }
 
             if( debug_log_mode == POLARSSL_DEBUG_LOG_FULL )
@@ -162,11 +160,15 @@ void debug_print_buf( const ssl_context *ssl, int level,
 
         idx += snprintf( str + idx, maxlen - idx, " %02x",
                          (unsigned int) buf[i] );
+        txt[i % 16] = ( buf[i] > 31 && buf[i] < 127 ) ? buf[i] : '.' ;
     }
 
     if( len > 0 )
     {
-        snprintf( str + idx, maxlen - idx, "\n" );
+        for( /* i = i */; i % 16 != 0; i++ )
+            idx += snprintf( str + idx, maxlen - idx, "   " );
+
+        snprintf( str + idx, maxlen - idx, "  %s\n", txt );
         ssl->f_dbg( ssl->p_dbg, level, str );
     }
 }

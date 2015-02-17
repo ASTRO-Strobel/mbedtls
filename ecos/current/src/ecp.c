@@ -1,12 +1,9 @@
 /*
  *  Elliptic curves over GF(p): generic functions
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -1895,6 +1892,48 @@ int ecp_gen_key( ecp_group_id grp_id, ecp_keypair *key,
         return( ret );
 
     return( ecp_gen_keypair( &key->grp, &key->d, &key->Q, f_rng, p_rng ) );
+}
+
+/*
+ * Check a public-private key pair
+ */
+int ecp_check_pub_priv( const ecp_keypair *pub, const ecp_keypair *prv )
+{
+    int ret;
+    ecp_point Q;
+    ecp_group grp;
+
+    if( pub->grp.id == POLARSSL_ECP_DP_NONE ||
+        pub->grp.id != prv->grp.id ||
+        mpi_cmp_mpi( &pub->Q.X, &prv->Q.X ) ||
+        mpi_cmp_mpi( &pub->Q.Y, &prv->Q.Y ) ||
+        mpi_cmp_mpi( &pub->Q.Z, &prv->Q.Z ) )
+    {
+        return( POLARSSL_ERR_ECP_BAD_INPUT_DATA );
+    }
+
+    ecp_point_init( &Q );
+    ecp_group_init( &grp );
+
+    /* ecp_mul() needs a non-const group... */
+    ecp_group_copy( &grp, &prv->grp );
+
+    /* Also checks d is valid */
+    MPI_CHK( ecp_mul( &grp, &Q, &prv->d, &prv->grp.G, NULL, NULL ) );
+
+    if( mpi_cmp_mpi( &Q.X, &prv->Q.X ) ||
+        mpi_cmp_mpi( &Q.Y, &prv->Q.Y ) ||
+        mpi_cmp_mpi( &Q.Z, &prv->Q.Z ) )
+    {
+        ret = POLARSSL_ERR_ECP_BAD_INPUT_DATA;
+        goto cleanup;
+    }
+
+cleanup:
+    ecp_point_free( &Q );
+    ecp_group_free( &grp );
+
+    return( ret );
 }
 
 #if defined(POLARSSL_SELF_TEST)

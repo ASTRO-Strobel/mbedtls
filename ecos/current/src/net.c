@@ -1,12 +1,9 @@
 /*
  *  TCP networking functions
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -497,12 +494,12 @@ int net_set_nonblock( int fd )
 void net_usleep( unsigned long usec )
 {
     struct timeval tv;
-    tv.tv_sec  = 0;
+    tv.tv_sec  = usec / 1000000;
 #if !defined(_WIN32) && ( defined(__unix__) || defined(__unix) || \
     ( defined(__APPLE__) && defined(__MACH__) ) )
-    tv.tv_usec = (suseconds_t) usec;
+    tv.tv_usec = (suseconds_t) usec % 1000000;
 #else
-    tv.tv_usec = usec;
+    tv.tv_usec = usec % 1000000;
 #endif
     select( 0, NULL, NULL, NULL, &tv );
 }

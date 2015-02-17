@@ -1,12 +1,9 @@
 /*
  *  Platform-specific and custom entropy polling functions
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -73,6 +70,43 @@ int platform_entropy_poll( void *data, unsigned char *output, size_t len,
 }
 #else /* _WIN32 && !EFIX64 && !EFI32 */
 
+/*
+ * Test for Linux getrandom() support.
+ * Since there is no wrapper in the libc yet, use the generic syscall wrapper
+ * available in GNU libc and compatible libc's (eg uClibc).
+ */
+#if defined(__linux__) && defined(__GLIBC__)
+#include <linux/version.h>
+#include <unistd.h>
+#include <sys/syscall.h>
+#if defined(SYS_getrandom)
+#define HAVE_GETRANDOM
+static int getrandom_wrapper( void *buf, size_t buflen, unsigned int flags )
+{
+    return( syscall( SYS_getrandom, buf, buflen, flags ) );
+}
+#endif /* SYS_getrandom */
+#endif /* __linux__ */
+
+#if defined(HAVE_GETRANDOM)
+
+#include <errno.h>
+
+int platform_entropy_poll( void *data,
+                           unsigned char *output, size_t len, size_t *olen )
+{
+    int ret;
+    ((void) data);
+
+    if( ( ret = getrandom_wrapper( output, len, 0 ) ) < 0 )
+        return( POLARSSL_ERR_ENTROPY_SOURCE_FAILED );
+
+    *olen = ret;
+    return( 0 );
+}
+
+#else /* HAVE_GETRANDOM */
+
 #include <stdio.h>
 
 int platform_entropy_poll( void *data,
@@ -100,6 +134,7 @@ int platform_entropy_poll( void *data,
 
     return( 0 );
 }
+#endif /* HAVE_GETRANDOM */
 #endif /* _WIN32 && !EFIX64 && !EFI32 */
 #endif /* !POLARSSL_NO_PLATFORM_ENTROPY */
 

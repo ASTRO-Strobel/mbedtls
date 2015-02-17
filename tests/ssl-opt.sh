@@ -20,7 +20,7 @@ set -u
 O_SRV="$OPENSSL_CMD s_server -www -cert data_files/server5.crt -key data_files/server5.key"
 O_CLI="echo 'GET / HTTP/1.0' | $OPENSSL_CMD s_client"
 G_SRV="$GNUTLS_SERV --x509certfile data_files/server5.crt --x509keyfile data_files/server5.key"
-G_CLI="$GNUTLS_CLI"
+G_CLI="echo 'GET / HTTP/1.0' | $GNUTLS_CLI --x509cafile data_files/test-ca_cat12.crt"
 
 TESTS=0
 FAILS=0
@@ -34,10 +34,10 @@ EXCLUDE='^$'
 
 print_usage() {
     echo "Usage: $0 [options]"
-    echo -e "  -h|--help\tPrint this help."
-    echo -e "  -m|--memcheck\tCheck memory leaks and errors."
-    echo -e "  -f|--filter\tOnly matching tests are executed (default: '$FILTER')"
-    echo -e "  -e|--exclude\tMatching tests are excluded (default: '$EXCLUDE')"
+    printf "  -h|--help\tPrint this help.\n"
+    printf "  -m|--memcheck\tCheck memory leaks and errors.\n"
+    printf "  -f|--filter\tOnly matching tests are executed (default: '$FILTER')\n"
+    printf "  -e|--exclude\tMatching tests are excluded (default: '$EXCLUDE')\n"
 }
 
 get_options() {
@@ -80,6 +80,21 @@ requires_openssl_with_sslv2() {
     fi
 }
 
+# skip next test if OpenSSL doesn't support FALLBACK_SCSV
+requires_openssl_with_fallback_scsv() {
+    if [ -z "${OPENSSL_HAS_FBSCSV:-}" ]; then
+        if $OPENSSL_CMD s_client -help 2>&1 | grep fallback_scsv >/dev/null
+        then
+            OPENSSL_HAS_FBSCSV="YES"
+        else
+            OPENSSL_HAS_FBSCSV="NO"
+        fi
+    fi
+    if [ "$OPENSSL_HAS_FBSCSV" = "NO" ]; then
+        SKIP_NEXT="YES"
+    fi
+}
+
 # skip next test if GnuTLS isn't available
 requires_gnutls() {
     if [ -z "${GNUTLS_AVAILABLE:-}" ]; then
@@ -96,10 +111,10 @@ requires_gnutls() {
 
 # print_name <name>
 print_name() {
-    echo -n "$1 "
+    printf "$1 "
     LEN=$(( 72 - `echo "$1" | wc -c` ))
-    for i in `seq 1 $LEN`; do echo -n '.'; done
-    echo -n ' '
+    for i in `seq 1 $LEN`; do printf '.'; done
+    printf ' '
 
     TESTS=$(( $TESTS + 1 ))
 }
@@ -148,7 +163,8 @@ wait_server_start() {
         WATCHDOG_PID=$!
 
         # make a tight loop, server usually takes less than 1 sec to start
-        until lsof -nbi TCP:"$PORT" | grep LISTEN >/dev/null; do :; done
+        until lsof -nbi TCP:"$PORT" 2>/dev/null | grep LISTEN >/dev/null; 
+        do :; done
 
         kill $WATCHDOG_PID
         wait $WATCHDOG_PID
@@ -232,14 +248,14 @@ run_test() {
     if is_polar "$SRV_CMD"; then
         if grep "Performing the SSL/TLS handshake" $SRV_OUT >/dev/null; then :;
         else
-            fail "server failed to start"
+            fail "server or client failed to reach handshake stage"
             return
         fi
     fi
     if is_polar "$CLI_CMD"; then
         if grep "Performing the SSL/TLS handshake" $CLI_OUT >/dev/null; then :;
         else
-            fail "client failed to start"
+            fail "server or client failed to reach handshake stage"
             return
         fi
     fi
@@ -356,7 +372,7 @@ fi
 
 # Pick a "unique" port in the range 10000-19999.
 PORT="0000$$"
-PORT="1$(echo $PORT | tail -c 5)"
+PORT="1$( printf $PORT | tail -c 4 )"
 
 # fix commands to use this port
 P_SRV="$P_SRV server_port=$PORT"
@@ -364,7 +380,7 @@ P_CLI="$P_CLI server_port=$PORT"
 O_SRV="$O_SRV -accept $PORT"
 O_CLI="$O_CLI -connect localhost:$PORT"
 G_SRV="$G_SRV -p $PORT"
-G_CLI="$G_CLI -p $PORT"
+G_CLI="$G_CLI -p $PORT localhost"
 
 # Also pick a unique name for intermediate files
 SRV_OUT="srv_out.$$"
@@ -392,6 +408,27 @@ run_test    "Default" \
             -S "error" \
             -C "error"
 
+# Tests for rc4 option
+
+run_test    "RC4: server disabled, client enabled" \
+            "$P_SRV" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
+            1 \
+            -s "SSL - None of the common ciphersuites is usable"
+
+run_test    "RC4: server enabled, client disabled" \
+            "$P_SRV force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
+            "$P_CLI" \
+            1 \
+            -s "SSL - The server has no ciphersuites in common"
+
+run_test    "RC4: both enabled" \
+            "$P_SRV arc4=1" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
+            0 \
+            -S "SSL - None of the common ciphersuites is usable" \
+            -S "SSL - The server has no ciphersuites in common"
+
 # Test for SSLv2 ClientHello
 
 requires_openssl_with_sslv2
@@ -413,17 +450,330 @@ run_test    "SSLv2 ClientHello: actual test" \
 
 # Tests for Truncated HMAC extension
 
-run_test    "Truncated HMAC: reference" \
+run_test    "Truncated HMAC: client default, server default" \
             "$P_SRV debug_level=4" \
-            "$P_CLI trunc_hmac=0 force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
             0 \
-            -s "dumping 'computed mac' (20 bytes)"
+            -s "dumping 'computed mac' (20 bytes)" \
+            -S "dumping 'computed mac' (10 bytes)"
 
-run_test    "Truncated HMAC: actual test" \
+run_test    "Truncated HMAC: client disabled, server default" \
             "$P_SRV debug_level=4" \
-            "$P_CLI trunc_hmac=1 force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA \
+             trunc_hmac=0" \
             0 \
+            -s "dumping 'computed mac' (20 bytes)" \
+            -S "dumping 'computed mac' (10 bytes)"
+
+run_test    "Truncated HMAC: client enabled, server default" \
+            "$P_SRV debug_level=4" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA \
+             trunc_hmac=1" \
+            0 \
+            -S "dumping 'computed mac' (20 bytes)" \
             -s "dumping 'computed mac' (10 bytes)"
+
+run_test    "Truncated HMAC: client enabled, server disabled" \
+            "$P_SRV debug_level=4 trunc_hmac=0" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA \
+             trunc_hmac=1" \
+            0 \
+            -s "dumping 'computed mac' (20 bytes)" \
+            -S "dumping 'computed mac' (10 bytes)"
+
+run_test    "Truncated HMAC: client enabled, server enabled" \
+            "$P_SRV debug_level=4 trunc_hmac=1" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA \
+             trunc_hmac=1" \
+            0 \
+            -S "dumping 'computed mac' (20 bytes)" \
+            -s "dumping 'computed mac' (10 bytes)"
+
+# Tests for Encrypt-then-MAC extension
+
+run_test    "Encrypt then MAC: default" \
+            "$P_SRV debug_level=3 \
+             force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            "$P_CLI debug_level=3" \
+            0 \
+            -c "client hello, adding encrypt_then_mac extension" \
+            -s "found encrypt then mac extension" \
+            -s "server hello, adding encrypt then mac extension" \
+            -c "found encrypt_then_mac extension" \
+            -c "using encrypt then mac" \
+            -s "using encrypt then mac"
+
+run_test    "Encrypt then MAC: client enabled, server disabled" \
+            "$P_SRV debug_level=3 etm=0 \
+             force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            "$P_CLI debug_level=3 etm=1" \
+            0 \
+            -c "client hello, adding encrypt_then_mac extension" \
+            -s "found encrypt then mac extension" \
+            -S "server hello, adding encrypt then mac extension" \
+            -C "found encrypt_then_mac extension" \
+            -C "using encrypt then mac" \
+            -S "using encrypt then mac"
+
+run_test    "Encrypt then MAC: client enabled, aead cipher" \
+            "$P_SRV debug_level=3 etm=1 \
+             force_ciphersuite=TLS-RSA-WITH-AES-128-GCM-SHA256" \
+            "$P_CLI debug_level=3 etm=1" \
+            0 \
+            -c "client hello, adding encrypt_then_mac extension" \
+            -s "found encrypt then mac extension" \
+            -S "server hello, adding encrypt then mac extension" \
+            -C "found encrypt_then_mac extension" \
+            -C "using encrypt then mac" \
+            -S "using encrypt then mac"
+
+run_test    "Encrypt then MAC: client enabled, stream cipher" \
+            "$P_SRV debug_level=3 etm=1 \
+             force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
+            "$P_CLI debug_level=3 etm=1 arc4=1" \
+            0 \
+            -c "client hello, adding encrypt_then_mac extension" \
+            -s "found encrypt then mac extension" \
+            -S "server hello, adding encrypt then mac extension" \
+            -C "found encrypt_then_mac extension" \
+            -C "using encrypt then mac" \
+            -S "using encrypt then mac"
+
+run_test    "Encrypt then MAC: client disabled, server enabled" \
+            "$P_SRV debug_level=3 etm=1 \
+             force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            "$P_CLI debug_level=3 etm=0" \
+            0 \
+            -C "client hello, adding encrypt_then_mac extension" \
+            -S "found encrypt then mac extension" \
+            -S "server hello, adding encrypt then mac extension" \
+            -C "found encrypt_then_mac extension" \
+            -C "using encrypt then mac" \
+            -S "using encrypt then mac"
+
+run_test    "Encrypt then MAC: client SSLv3, server enabled" \
+            "$P_SRV debug_level=3 min_version=ssl3 \
+             force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            "$P_CLI debug_level=3 force_version=ssl3" \
+            0 \
+            -C "client hello, adding encrypt_then_mac extension" \
+            -S "found encrypt then mac extension" \
+            -S "server hello, adding encrypt then mac extension" \
+            -C "found encrypt_then_mac extension" \
+            -C "using encrypt then mac" \
+            -S "using encrypt then mac"
+
+run_test    "Encrypt then MAC: client enabled, server SSLv3" \
+            "$P_SRV debug_level=3 force_version=ssl3 \
+             force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            "$P_CLI debug_level=3 min_version=ssl3" \
+            0 \
+            -c "client hello, adding encrypt_then_mac extension" \
+            -s "found encrypt then mac extension" \
+            -S "server hello, adding encrypt then mac extension" \
+            -C "found encrypt_then_mac extension" \
+            -C "using encrypt then mac" \
+            -S "using encrypt then mac"
+
+# Tests for Extended Master Secret extension
+
+run_test    "Extended Master Secret: default" \
+            "$P_SRV debug_level=3" \
+            "$P_CLI debug_level=3" \
+            0 \
+            -c "client hello, adding extended_master_secret extension" \
+            -s "found extended master secret extension" \
+            -s "server hello, adding extended master secret extension" \
+            -c "found extended_master_secret extension" \
+            -c "using extended master secret" \
+            -s "using extended master secret"
+
+run_test    "Extended Master Secret: client enabled, server disabled" \
+            "$P_SRV debug_level=3 extended_ms=0" \
+            "$P_CLI debug_level=3 extended_ms=1" \
+            0 \
+            -c "client hello, adding extended_master_secret extension" \
+            -s "found extended master secret extension" \
+            -S "server hello, adding extended master secret extension" \
+            -C "found extended_master_secret extension" \
+            -C "using extended master secret" \
+            -S "using extended master secret"
+
+run_test    "Extended Master Secret: client disabled, server enabled" \
+            "$P_SRV debug_level=3 extended_ms=1" \
+            "$P_CLI debug_level=3 extended_ms=0" \
+            0 \
+            -C "client hello, adding extended_master_secret extension" \
+            -S "found extended master secret extension" \
+            -S "server hello, adding extended master secret extension" \
+            -C "found extended_master_secret extension" \
+            -C "using extended master secret" \
+            -S "using extended master secret"
+
+run_test    "Extended Master Secret: client SSLv3, server enabled" \
+            "$P_SRV debug_level=3 min_version=ssl3" \
+            "$P_CLI debug_level=3 force_version=ssl3" \
+            0 \
+            -C "client hello, adding extended_master_secret extension" \
+            -S "found extended master secret extension" \
+            -S "server hello, adding extended master secret extension" \
+            -C "found extended_master_secret extension" \
+            -C "using extended master secret" \
+            -S "using extended master secret"
+
+run_test    "Extended Master Secret: client enabled, server SSLv3" \
+            "$P_SRV debug_level=3 force_version=ssl3" \
+            "$P_CLI debug_level=3 min_version=ssl3" \
+            0 \
+            -c "client hello, adding extended_master_secret extension" \
+            -s "found extended master secret extension" \
+            -S "server hello, adding extended master secret extension" \
+            -C "found extended_master_secret extension" \
+            -C "using extended master secret" \
+            -S "using extended master secret"
+
+# Tests for FALLBACK_SCSV
+
+run_test    "Fallback SCSV: default" \
+            "$P_SRV" \
+            "$P_CLI debug_level=3 force_version=tls1_1" \
+            0 \
+            -C "adding FALLBACK_SCSV" \
+            -S "received FALLBACK_SCSV" \
+            -S "inapropriate fallback" \
+            -C "is a fatal alert message (msg 86)"
+
+run_test    "Fallback SCSV: explicitly disabled" \
+            "$P_SRV" \
+            "$P_CLI debug_level=3 force_version=tls1_1 fallback=0" \
+            0 \
+            -C "adding FALLBACK_SCSV" \
+            -S "received FALLBACK_SCSV" \
+            -S "inapropriate fallback" \
+            -C "is a fatal alert message (msg 86)"
+
+run_test    "Fallback SCSV: enabled" \
+            "$P_SRV" \
+            "$P_CLI debug_level=3 force_version=tls1_1 fallback=1" \
+            1 \
+            -c "adding FALLBACK_SCSV" \
+            -s "received FALLBACK_SCSV" \
+            -s "inapropriate fallback" \
+            -c "is a fatal alert message (msg 86)"
+
+run_test    "Fallback SCSV: enabled, max version" \
+            "$P_SRV" \
+            "$P_CLI debug_level=3 fallback=1" \
+            0 \
+            -c "adding FALLBACK_SCSV" \
+            -s "received FALLBACK_SCSV" \
+            -S "inapropriate fallback" \
+            -C "is a fatal alert message (msg 86)"
+
+requires_openssl_with_fallback_scsv
+run_test    "Fallback SCSV: default, openssl server" \
+            "$O_SRV" \
+            "$P_CLI debug_level=3 force_version=tls1_1 fallback=0" \
+            0 \
+            -C "adding FALLBACK_SCSV" \
+            -C "is a fatal alert message (msg 86)"
+
+requires_openssl_with_fallback_scsv
+run_test    "Fallback SCSV: enabled, openssl server" \
+            "$O_SRV" \
+            "$P_CLI debug_level=3 force_version=tls1_1 fallback=1" \
+            1 \
+            -c "adding FALLBACK_SCSV" \
+            -c "is a fatal alert message (msg 86)"
+
+requires_openssl_with_fallback_scsv
+run_test    "Fallback SCSV: disabled, openssl client" \
+            "$P_SRV" \
+            "$O_CLI -tls1_1" \
+            0 \
+            -S "received FALLBACK_SCSV" \
+            -S "inapropriate fallback"
+
+requires_openssl_with_fallback_scsv
+run_test    "Fallback SCSV: enabled, openssl client" \
+            "$P_SRV" \
+            "$O_CLI -tls1_1 -fallback_scsv" \
+            1 \
+            -s "received FALLBACK_SCSV" \
+            -s "inapropriate fallback"
+
+requires_openssl_with_fallback_scsv
+run_test    "Fallback SCSV: enabled, max version, openssl client" \
+            "$P_SRV" \
+            "$O_CLI -fallback_scsv" \
+            0 \
+            -s "received FALLBACK_SCSV" \
+            -S "inapropriate fallback"
+
+# Tests for CBC 1/n-1 record splitting
+
+run_test    "CBC Record splitting: TLS 1.2, no splitting" \
+            "$P_SRV" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA \
+             request_size=123 force_version=tls1_2" \
+            0 \
+            -s "Read from client: 123 bytes read" \
+            -S "Read from client: 1 bytes read" \
+            -S "122 bytes read"
+
+run_test    "CBC Record splitting: TLS 1.1, no splitting" \
+            "$P_SRV" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA \
+             request_size=123 force_version=tls1_1" \
+            0 \
+            -s "Read from client: 123 bytes read" \
+            -S "Read from client: 1 bytes read" \
+            -S "122 bytes read"
+
+run_test    "CBC Record splitting: TLS 1.0, splitting" \
+            "$P_SRV" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA \
+             request_size=123 force_version=tls1" \
+            0 \
+            -S "Read from client: 123 bytes read" \
+            -s "Read from client: 1 bytes read" \
+            -s "122 bytes read"
+
+run_test    "CBC Record splitting: SSLv3, splitting" \
+            "$P_SRV min_version=ssl3" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA \
+             request_size=123 force_version=ssl3" \
+            0 \
+            -S "Read from client: 123 bytes read" \
+            -s "Read from client: 1 bytes read" \
+            -s "122 bytes read"
+
+run_test    "CBC Record splitting: TLS 1.0 RC4, no splitting" \
+            "$P_SRV arc4=1" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA \
+             request_size=123 force_version=tls1" \
+            0 \
+            -s "Read from client: 123 bytes read" \
+            -S "Read from client: 1 bytes read" \
+            -S "122 bytes read"
+
+run_test    "CBC Record splitting: TLS 1.0, splitting disabled" \
+            "$P_SRV" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA \
+             request_size=123 force_version=tls1 recsplit=0" \
+            0 \
+            -s "Read from client: 123 bytes read" \
+            -S "Read from client: 1 bytes read" \
+            -S "122 bytes read"
+
+run_test    "CBC Record splitting: TLS 1.0, splitting, nbio" \
+            "$P_SRV nbio=2" \
+            "$P_CLI nbio=2 force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA \
+             request_size=123 force_version=tls1" \
+            0 \
+            -S "Read from client: 123 bytes read" \
+            -s "Read from client: 1 bytes read" \
+            -s "122 bytes read"
 
 # Tests for Session Tickets
 
@@ -770,6 +1120,71 @@ run_test    "Renegotiation: server-initiated, client-accepted, delay 0" \
             -S "SSL - An unexpected message was received from our peer" \
             -S "failed"
 
+run_test    "Renegotiation: periodic, just below period" \
+            "$P_SRV debug_level=3 exchanges=9 renegotiation=1 renego_period=3" \
+            "$P_CLI debug_level=3 exchanges=2 renegotiation=1" \
+            0 \
+            -C "client hello, adding renegotiation extension" \
+            -s "received TLS_EMPTY_RENEGOTIATION_INFO" \
+            -S "found renegotiation extension" \
+            -s "server hello, secure renegotiation extension" \
+            -c "found renegotiation extension" \
+            -S "record counter limit reached: renegotiate" \
+            -C "=> renegotiate" \
+            -S "=> renegotiate" \
+            -S "write hello request" \
+            -S "SSL - An unexpected message was received from our peer" \
+            -S "failed"
+
+# one extra exchange to be able to complete renego
+run_test    "Renegotiation: periodic, just above period" \
+            "$P_SRV debug_level=3 exchanges=9 renegotiation=1 renego_period=3" \
+            "$P_CLI debug_level=3 exchanges=4 renegotiation=1" \
+            0 \
+            -c "client hello, adding renegotiation extension" \
+            -s "received TLS_EMPTY_RENEGOTIATION_INFO" \
+            -s "found renegotiation extension" \
+            -s "server hello, secure renegotiation extension" \
+            -c "found renegotiation extension" \
+            -s "record counter limit reached: renegotiate" \
+            -c "=> renegotiate" \
+            -s "=> renegotiate" \
+            -s "write hello request" \
+            -S "SSL - An unexpected message was received from our peer" \
+            -S "failed"
+
+run_test    "Renegotiation: periodic, two times period" \
+            "$P_SRV debug_level=3 exchanges=9 renegotiation=1 renego_period=3" \
+            "$P_CLI debug_level=3 exchanges=7 renegotiation=1" \
+            0 \
+            -c "client hello, adding renegotiation extension" \
+            -s "received TLS_EMPTY_RENEGOTIATION_INFO" \
+            -s "found renegotiation extension" \
+            -s "server hello, secure renegotiation extension" \
+            -c "found renegotiation extension" \
+            -s "record counter limit reached: renegotiate" \
+            -c "=> renegotiate" \
+            -s "=> renegotiate" \
+            -s "write hello request" \
+            -S "SSL - An unexpected message was received from our peer" \
+            -S "failed"
+
+run_test    "Renegotiation: periodic, above period, disabled" \
+            "$P_SRV debug_level=3 exchanges=9 renegotiation=0 renego_period=3" \
+            "$P_CLI debug_level=3 exchanges=4 renegotiation=1" \
+            0 \
+            -C "client hello, adding renegotiation extension" \
+            -s "received TLS_EMPTY_RENEGOTIATION_INFO" \
+            -S "found renegotiation extension" \
+            -s "server hello, secure renegotiation extension" \
+            -c "found renegotiation extension" \
+            -S "record counter limit reached: renegotiate" \
+            -C "=> renegotiate" \
+            -S "=> renegotiate" \
+            -S "write hello request" \
+            -S "SSL - An unexpected message was received from our peer" \
+            -S "failed"
+
 run_test    "Renegotiation: nbio, client-initiated" \
             "$P_SRV debug_level=3 nbio=2 exchanges=2 renegotiation=1" \
             "$P_CLI debug_level=3 nbio=2 exchanges=2 renegotiation=1 renegotiate=1" \
@@ -803,20 +1218,112 @@ run_test    "Renegotiation: openssl server, client-initiated" \
             -c "client hello, adding renegotiation extension" \
             -c "found renegotiation extension" \
             -c "=> renegotiate" \
-            -C "ssl_handshake returned" \
+            -C "ssl_hanshake() returned" \
             -C "error" \
             -c "HTTP/1.0 200 [Oo][Kk]"
 
-run_test    "Renegotiation: gnutls server, client-initiated" \
-            "$G_SRV" \
+requires_gnutls
+run_test    "Renegotiation: gnutls server strict, client-initiated" \
+            "$G_SRV --priority=NORMAL:%SAFE_RENEGOTIATION" \
             "$P_CLI debug_level=3 exchanges=1 renegotiation=1 renegotiate=1" \
             0 \
             -c "client hello, adding renegotiation extension" \
             -c "found renegotiation extension" \
             -c "=> renegotiate" \
-            -C "ssl_handshake returned" \
+            -C "ssl_hanshake() returned" \
             -C "error" \
             -c "HTTP/1.0 200 [Oo][Kk]"
+
+requires_gnutls
+run_test    "Renegotiation: gnutls server unsafe, client-initiated default" \
+            "$G_SRV --priority=NORMAL:%DISABLE_SAFE_RENEGOTIATION" \
+            "$P_CLI debug_level=3 exchanges=1 renegotiation=1 renegotiate=1" \
+            1 \
+            -c "client hello, adding renegotiation extension" \
+            -C "found renegotiation extension" \
+            -c "=> renegotiate" \
+            -c "ssl_handshake() returned" \
+            -c "error" \
+            -C "HTTP/1.0 200 [Oo][Kk]"
+
+requires_gnutls
+run_test    "Renegotiation: gnutls server unsafe, client-inititated no legacy" \
+            "$G_SRV --priority=NORMAL:%DISABLE_SAFE_RENEGOTIATION" \
+            "$P_CLI debug_level=3 exchanges=1 renegotiation=1 renegotiate=1 \
+             allow_legacy=0" \
+            1 \
+            -c "client hello, adding renegotiation extension" \
+            -C "found renegotiation extension" \
+            -c "=> renegotiate" \
+            -c "ssl_handshake() returned" \
+            -c "error" \
+            -C "HTTP/1.0 200 [Oo][Kk]"
+
+requires_gnutls
+run_test    "Renegotiation: gnutls server unsafe, client-inititated legacy" \
+            "$G_SRV --priority=NORMAL:%DISABLE_SAFE_RENEGOTIATION" \
+            "$P_CLI debug_level=3 exchanges=1 renegotiation=1 renegotiate=1 \
+             allow_legacy=1" \
+            0 \
+            -c "client hello, adding renegotiation extension" \
+            -C "found renegotiation extension" \
+            -c "=> renegotiate" \
+            -C "ssl_hanshake() returned" \
+            -C "error" \
+            -c "HTTP/1.0 200 [Oo][Kk]"
+
+# Test for the "secure renegotation" extension only (no actual renegotiation)
+
+requires_gnutls
+run_test    "Renego ext: gnutls server strict, client default" \
+            "$G_SRV --priority=NORMAL:%SAFE_RENEGOTIATION" \
+            "$P_CLI debug_level=3" \
+            0 \
+            -c "found renegotiation extension" \
+            -C "error" \
+            -c "HTTP/1.0 200 [Oo][Kk]"
+
+requires_gnutls
+run_test    "Renego ext: gnutls server unsafe, client default" \
+            "$G_SRV --priority=NORMAL:%DISABLE_SAFE_RENEGOTIATION" \
+            "$P_CLI debug_level=3" \
+            0 \
+            -C "found renegotiation extension" \
+            -C "error" \
+            -c "HTTP/1.0 200 [Oo][Kk]"
+
+requires_gnutls
+run_test    "Renego ext: gnutls server unsafe, client break legacy" \
+            "$G_SRV --priority=NORMAL:%DISABLE_SAFE_RENEGOTIATION" \
+            "$P_CLI debug_level=3 allow_legacy=-1" \
+            1 \
+            -C "found renegotiation extension" \
+            -c "error" \
+            -C "HTTP/1.0 200 [Oo][Kk]"
+
+requires_gnutls
+run_test    "Renego ext: gnutls client strict, server default" \
+            "$P_SRV debug_level=3" \
+            "$G_CLI --priority=NORMAL:%SAFE_RENEGOTIATION" \
+            0 \
+            -s "received TLS_EMPTY_RENEGOTIATION_INFO\|found renegotiation extension" \
+            -s "server hello, secure renegotiation extension"
+
+requires_gnutls
+run_test    "Renego ext: gnutls client unsafe, server default" \
+            "$P_SRV debug_level=3" \
+            "$G_CLI --priority=NORMAL:%DISABLE_SAFE_RENEGOTIATION" \
+            0 \
+            -S "received TLS_EMPTY_RENEGOTIATION_INFO\|found renegotiation extension" \
+            -S "server hello, secure renegotiation extension"
+
+requires_gnutls
+run_test    "Renego ext: gnutls client unsafe, server break legacy" \
+            "$P_SRV debug_level=3 allow_legacy=-1" \
+            "$G_CLI --priority=NORMAL:%DISABLE_SAFE_RENEGOTIATION" \
+            1 \
+            -S "received TLS_EMPTY_RENEGOTIATION_INFO\|found renegotiation extension" \
+            -S "server hello, secure renegotiation extension"
 
 # Tests for auth_mode
 
@@ -940,7 +1447,7 @@ run_test    "Authentication: client no cert, openssl server optional" \
 
 run_test    "Authentication: client no cert, ssl3" \
             "$P_SRV debug_level=3 auth_mode=optional force_version=ssl3" \
-            "$P_CLI debug_level=3 crt_file=none key_file=none" \
+            "$P_CLI debug_level=3 crt_file=none key_file=none min_version=ssl3" \
             0 \
             -S "skip write certificate request" \
             -C "skip parse certificate request" \
@@ -954,6 +1461,60 @@ run_test    "Authentication: client no cert, ssl3" \
             -S "! ssl_handshake returned" \
             -C "! ssl_handshake returned" \
             -S "X509 - Certificate verification failed"
+
+# Tests for certificate selection based on SHA verson
+
+run_test    "Certificate hash: client TLS 1.2 -> SHA-2" \
+            "$P_SRV crt_file=data_files/server5.crt \
+                    key_file=data_files/server5.key \
+                    crt_file2=data_files/server5-sha1.crt \
+                    key_file2=data_files/server5.key" \
+            "$P_CLI force_version=tls1_2" \
+            0 \
+            -c "signed using.*ECDSA with SHA256" \
+            -C "signed using.*ECDSA with SHA1"
+
+run_test    "Certificate hash: client TLS 1.1 -> SHA-1" \
+            "$P_SRV crt_file=data_files/server5.crt \
+                    key_file=data_files/server5.key \
+                    crt_file2=data_files/server5-sha1.crt \
+                    key_file2=data_files/server5.key" \
+            "$P_CLI force_version=tls1_1" \
+            0 \
+            -C "signed using.*ECDSA with SHA256" \
+            -c "signed using.*ECDSA with SHA1"
+
+run_test    "Certificate hash: client TLS 1.0 -> SHA-1" \
+            "$P_SRV crt_file=data_files/server5.crt \
+                    key_file=data_files/server5.key \
+                    crt_file2=data_files/server5-sha1.crt \
+                    key_file2=data_files/server5.key" \
+            "$P_CLI force_version=tls1" \
+            0 \
+            -C "signed using.*ECDSA with SHA256" \
+            -c "signed using.*ECDSA with SHA1"
+
+run_test    "Certificate hash: client TLS 1.1, no SHA-1 -> SHA-2 (order 1)" \
+            "$P_SRV crt_file=data_files/server5.crt \
+                    key_file=data_files/server5.key \
+                    crt_file2=data_files/server6.crt \
+                    key_file2=data_files/server6.key" \
+            "$P_CLI force_version=tls1_1" \
+            0 \
+            -c "serial number.*09" \
+            -c "signed using.*ECDSA with SHA256" \
+            -C "signed using.*ECDSA with SHA1"
+
+run_test    "Certificate hash: client TLS 1.1, no SHA-1 -> SHA-2 (order 2)" \
+            "$P_SRV crt_file=data_files/server6.crt \
+                    key_file=data_files/server6.key \
+                    crt_file2=data_files/server5.crt \
+                    key_file2=data_files/server5.key" \
+            "$P_CLI force_version=tls1_1" \
+            0 \
+            -c "serial number.*0A" \
+            -c "signed using.*ECDSA with SHA256" \
+            -C "signed using.*ECDSA with SHA1"
 
 # tests for SNI
 
@@ -1507,7 +2068,7 @@ run_test    "PSK callback: psk, no callback" \
             "$P_CLI force_ciphersuite=TLS-PSK-WITH-AES-128-CBC-SHA \
             psk_identity=foo psk=abc123" \
             0 \
-            -S "SSL - The server has no ciphersuites in common" \
+            -S "SSL - None of the common ciphersuites is usable" \
             -S "SSL - Unknown identity received" \
             -S "SSL - Verification of the message MAC failed"
 
@@ -1516,7 +2077,7 @@ run_test    "PSK callback: no psk, no callback" \
             "$P_CLI force_ciphersuite=TLS-PSK-WITH-AES-128-CBC-SHA \
             psk_identity=foo psk=abc123" \
             1 \
-            -s "SSL - The server has no ciphersuites in common" \
+            -s "SSL - None of the common ciphersuites is usable" \
             -S "SSL - Unknown identity received" \
             -S "SSL - Verification of the message MAC failed"
 
@@ -1525,7 +2086,7 @@ run_test    "PSK callback: callback overrides other settings" \
             "$P_CLI force_ciphersuite=TLS-PSK-WITH-AES-128-CBC-SHA \
             psk_identity=foo psk=abc123" \
             1 \
-            -S "SSL - The server has no ciphersuites in common" \
+            -S "SSL - None of the common ciphersuites is usable" \
             -s "SSL - Unknown identity received" \
             -S "SSL - Verification of the message MAC failed"
 
@@ -1534,7 +2095,7 @@ run_test    "PSK callback: first id matches" \
             "$P_CLI force_ciphersuite=TLS-PSK-WITH-AES-128-CBC-SHA \
             psk_identity=abc psk=dead" \
             0 \
-            -S "SSL - The server has no ciphersuites in common" \
+            -S "SSL - None of the common ciphersuites is usable" \
             -S "SSL - Unknown identity received" \
             -S "SSL - Verification of the message MAC failed"
 
@@ -1543,7 +2104,7 @@ run_test    "PSK callback: second id matches" \
             "$P_CLI force_ciphersuite=TLS-PSK-WITH-AES-128-CBC-SHA \
             psk_identity=def psk=beef" \
             0 \
-            -S "SSL - The server has no ciphersuites in common" \
+            -S "SSL - None of the common ciphersuites is usable" \
             -S "SSL - Unknown identity received" \
             -S "SSL - Verification of the message MAC failed"
 
@@ -1552,7 +2113,7 @@ run_test    "PSK callback: no match" \
             "$P_CLI force_ciphersuite=TLS-PSK-WITH-AES-128-CBC-SHA \
             psk_identity=ghi psk=beef" \
             1 \
-            -S "SSL - The server has no ciphersuites in common" \
+            -S "SSL - None of the common ciphersuites is usable" \
             -s "SSL - Unknown identity received" \
             -S "SSL - Verification of the message MAC failed"
 
@@ -1561,21 +2122,21 @@ run_test    "PSK callback: wrong key" \
             "$P_CLI force_ciphersuite=TLS-PSK-WITH-AES-128-CBC-SHA \
             psk_identity=abc psk=beef" \
             1 \
-            -S "SSL - The server has no ciphersuites in common" \
+            -S "SSL - None of the common ciphersuites is usable" \
             -S "SSL - Unknown identity received" \
             -s "SSL - Verification of the message MAC failed"
 
 # Tests for ciphersuites per version
 
 run_test    "Per-version suites: SSL3" \
-            "$P_SRV version_suites=TLS-RSA-WITH-3DES-EDE-CBC-SHA,TLS-RSA-WITH-RC4-128-SHA,TLS-RSA-WITH-AES-128-CBC-SHA,TLS-RSA-WITH-AES-128-GCM-SHA256" \
+            "$P_SRV min_version=ssl3 version_suites=TLS-RSA-WITH-3DES-EDE-CBC-SHA,TLS-RSA-WITH-RC4-128-SHA,TLS-RSA-WITH-AES-128-CBC-SHA,TLS-RSA-WITH-AES-128-GCM-SHA256" \
             "$P_CLI force_version=ssl3" \
             0 \
             -c "Ciphersuite is TLS-RSA-WITH-3DES-EDE-CBC-SHA"
 
 run_test    "Per-version suites: TLS 1.0" \
-            "$P_SRV version_suites=TLS-RSA-WITH-3DES-EDE-CBC-SHA,TLS-RSA-WITH-RC4-128-SHA,TLS-RSA-WITH-AES-128-CBC-SHA,TLS-RSA-WITH-AES-128-GCM-SHA256" \
-            "$P_CLI force_version=tls1" \
+            "$P_SRV arc4=1 version_suites=TLS-RSA-WITH-3DES-EDE-CBC-SHA,TLS-RSA-WITH-RC4-128-SHA,TLS-RSA-WITH-AES-128-CBC-SHA,TLS-RSA-WITH-AES-128-GCM-SHA256" \
+            "$P_CLI force_version=tls1 arc4=1" \
             0 \
             -c "Ciphersuite is TLS-RSA-WITH-RC4-128-SHA"
 
@@ -1608,14 +2169,14 @@ run_test    "ssl_get_bytes_avail: extra data" \
 # Tests for small packets
 
 run_test    "Small packet SSLv3 BlockCipher" \
-            "$P_SRV" \
+            "$P_SRV min_version=ssl3" \
             "$P_CLI request_size=1 force_version=ssl3 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
             0 \
             -s "Read from client: 1 bytes read"
 
 run_test    "Small packet SSLv3 StreamCipher" \
-            "$P_SRV" \
+            "$P_SRV min_version=ssl3 arc4=1" \
             "$P_CLI request_size=1 force_version=ssl3 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             0 \
@@ -1624,6 +2185,13 @@ run_test    "Small packet SSLv3 StreamCipher" \
 run_test    "Small packet TLS 1.0 BlockCipher" \
             "$P_SRV" \
             "$P_CLI request_size=1 force_version=tls1 \
+             force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
+            0 \
+            -s "Read from client: 1 bytes read"
+
+run_test    "Small packet TLS 1.0 BlockCipher without EtM" \
+            "$P_SRV" \
+            "$P_CLI request_size=1 force_version=tls1 etm=0 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
             0 \
             -s "Read from client: 1 bytes read"
@@ -1637,7 +2205,7 @@ run_test    "Small packet TLS 1.0 BlockCipher truncated MAC" \
             -s "Read from client: 1 bytes read"
 
 run_test    "Small packet TLS 1.0 StreamCipher truncated MAC" \
-            "$P_SRV" \
+            "$P_SRV arc4=1" \
             "$P_CLI request_size=1 force_version=tls1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA \
              trunc_hmac=1" \
@@ -1651,8 +2219,15 @@ run_test    "Small packet TLS 1.1 BlockCipher" \
             0 \
             -s "Read from client: 1 bytes read"
 
-run_test    "Small packet TLS 1.1 StreamCipher" \
+run_test    "Small packet TLS 1.1 BlockCipher without EtM" \
             "$P_SRV" \
+            "$P_CLI request_size=1 force_version=tls1_1 etm=0 \
+             force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
+            0 \
+            -s "Read from client: 1 bytes read"
+
+run_test    "Small packet TLS 1.1 StreamCipher" \
+            "$P_SRV arc4=1" \
             "$P_CLI request_size=1 force_version=tls1_1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             0 \
@@ -1667,7 +2242,7 @@ run_test    "Small packet TLS 1.1 BlockCipher truncated MAC" \
             -s "Read from client: 1 bytes read"
 
 run_test    "Small packet TLS 1.1 StreamCipher truncated MAC" \
-            "$P_SRV" \
+            "$P_SRV arc4=1" \
             "$P_CLI request_size=1 force_version=tls1_1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA \
              trunc_hmac=1" \
@@ -1681,9 +2256,17 @@ run_test    "Small packet TLS 1.2 BlockCipher" \
             0 \
             -s "Read from client: 1 bytes read"
 
+run_test    "Small packet TLS 1.2 BlockCipher without EtM" \
+            "$P_SRV" \
+            "$P_CLI request_size=1 force_version=tls1_2 etm=0 \
+             force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
+            0 \
+            -s "Read from client: 1 bytes read"
+
 run_test    "Small packet TLS 1.2 BlockCipher larger MAC" \
             "$P_SRV" \
-            "$P_CLI request_size=1 force_version=tls1_2 force_ciphersuite=TLS-ECDHE-RSA-WITH-AES-256-CBC-SHA384" \
+            "$P_CLI request_size=1 force_version=tls1_2 \
+             force_ciphersuite=TLS-ECDHE-RSA-WITH-AES-256-CBC-SHA384" \
             0 \
             -s "Read from client: 1 bytes read"
 
@@ -1696,14 +2279,14 @@ run_test    "Small packet TLS 1.2 BlockCipher truncated MAC" \
             -s "Read from client: 1 bytes read"
 
 run_test    "Small packet TLS 1.2 StreamCipher" \
-            "$P_SRV" \
+            "$P_SRV arc4=1" \
             "$P_CLI request_size=1 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             0 \
             -s "Read from client: 1 bytes read"
 
 run_test    "Small packet TLS 1.2 StreamCipher truncated MAC" \
-            "$P_SRV" \
+            "$P_SRV arc4=1" \
             "$P_CLI request_size=1 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA \
              trunc_hmac=1" \
@@ -1727,14 +2310,14 @@ run_test    "Small packet TLS 1.2 AEAD shorter tag" \
 # Test for large packets
 
 run_test    "Large packet SSLv3 BlockCipher" \
-            "$P_SRV" \
-            "$P_CLI request_size=16384 force_version=ssl3 \
+            "$P_SRV min_version=ssl3" \
+            "$P_CLI request_size=16384 force_version=ssl3 recsplit=0 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
             0 \
             -s "Read from client: 16384 bytes read"
 
 run_test    "Large packet SSLv3 StreamCipher" \
-            "$P_SRV" \
+            "$P_SRV min_version=ssl3 arc4=1" \
             "$P_CLI request_size=16384 force_version=ssl3 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             0 \
@@ -1742,21 +2325,21 @@ run_test    "Large packet SSLv3 StreamCipher" \
 
 run_test    "Large packet TLS 1.0 BlockCipher" \
             "$P_SRV" \
-            "$P_CLI request_size=16384 force_version=tls1 \
+            "$P_CLI request_size=16384 force_version=tls1 recsplit=0 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
             0 \
             -s "Read from client: 16384 bytes read"
 
 run_test    "Large packet TLS 1.0 BlockCipher truncated MAC" \
             "$P_SRV" \
-            "$P_CLI request_size=16384 force_version=tls1 \
+            "$P_CLI request_size=16384 force_version=tls1 recsplit=0 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA \
              trunc_hmac=1" \
             0 \
             -s "Read from client: 16384 bytes read"
 
 run_test    "Large packet TLS 1.0 StreamCipher truncated MAC" \
-            "$P_SRV" \
+            "$P_SRV arc4=1" \
             "$P_CLI request_size=16384 force_version=tls1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA \
              trunc_hmac=1" \
@@ -1771,7 +2354,7 @@ run_test    "Large packet TLS 1.1 BlockCipher" \
             -s "Read from client: 16384 bytes read"
 
 run_test    "Large packet TLS 1.1 StreamCipher" \
-            "$P_SRV" \
+            "$P_SRV arc4=1" \
             "$P_CLI request_size=16384 force_version=tls1_1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             0 \
@@ -1786,7 +2369,7 @@ run_test    "Large packet TLS 1.1 BlockCipher truncated MAC" \
             -s "Read from client: 16384 bytes read"
 
 run_test    "Large packet TLS 1.1 StreamCipher truncated MAC" \
-            "$P_SRV" \
+            "$P_SRV arc4=1" \
             "$P_CLI request_size=16384 force_version=tls1_1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA \
              trunc_hmac=1" \
@@ -1802,7 +2385,8 @@ run_test    "Large packet TLS 1.2 BlockCipher" \
 
 run_test    "Large packet TLS 1.2 BlockCipher larger MAC" \
             "$P_SRV" \
-            "$P_CLI request_size=16384 force_version=tls1_2 force_ciphersuite=TLS-ECDHE-RSA-WITH-AES-256-CBC-SHA384" \
+            "$P_CLI request_size=16384 force_version=tls1_2 \
+             force_ciphersuite=TLS-ECDHE-RSA-WITH-AES-256-CBC-SHA384" \
             0 \
             -s "Read from client: 16384 bytes read"
 
@@ -1815,14 +2399,14 @@ run_test    "Large packet TLS 1.2 BlockCipher truncated MAC" \
             -s "Read from client: 16384 bytes read"
 
 run_test    "Large packet TLS 1.2 StreamCipher" \
-            "$P_SRV" \
+            "$P_SRV arc4=1" \
             "$P_CLI request_size=16384 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             0 \
             -s "Read from client: 16384 bytes read"
 
 run_test    "Large packet TLS 1.2 StreamCipher truncated MAC" \
-            "$P_SRV" \
+            "$P_SRV arc4=1" \
             "$P_CLI request_size=16384 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA \
              trunc_hmac=1" \
@@ -1848,9 +2432,9 @@ run_test    "Large packet TLS 1.2 AEAD shorter tag" \
 echo "------------------------------------------------------------------------"
 
 if [ $FAILS = 0 ]; then
-    echo -n "PASSED"
+    printf "PASSED"
 else
-    echo -n "FAILED"
+    printf "FAILED"
 fi
 PASSES=$(( $TESTS - $FAILS ))
 echo " ($PASSES / $TESTS tests ($SKIPS skipped))"

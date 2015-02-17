@@ -1,12 +1,9 @@
 /*
  *  X.509 common functions for parsing and verification
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -64,12 +61,9 @@
 #include <time.h>
 #endif
 
-#if defined(EFIX64) || defined(EFI32)
 #include <stdio.h>
-#endif
 
 #if defined(POLARSSL_FS_IO)
-#include <stdio.h>
 #if !defined(_WIN32)
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -399,6 +393,11 @@ static int x509_get_attr_type_value( unsigned char **p,
 }
 
 /*
+ *  Name ::= CHOICE { -- only one possibility for now --
+ *       rdnSequence  RDNSequence }
+ *
+ *  RDNSequence ::= SEQUENCE OF RelativeDistinguishedName
+ *
  *  RelativeDistinguishedName ::=
  *    SET OF AttributeTypeAndValue
  *
@@ -410,9 +409,11 @@ static int x509_get_attr_type_value( unsigned char **p,
  *
  *  AttributeValue ::= ANY DEFINED BY AttributeType
  *
- *  We restrict RelativeDistinguishedName to be a set of 1 element. This is
- *  the most common case, and our x509_name structure currently can't handle
- *  more than that.
+ * The data structure is optimized for the common case where each RDN has only
+ * one element, which is represented as a list of AttributeTypeAndValue.
+ * For the general case we still use a flat list, but we mark elements of the
+ * same set so that they are "merged" together in the functions that consume
+ * this list, eg x509_dn_gets().
  */
 int x509_get_name( unsigned char **p, const unsigned char *end,
                    x509_name *cur )
@@ -421,35 +422,54 @@ int x509_get_name( unsigned char **p, const unsigned char *end,
     size_t set_len;
     const unsigned char *end_set;
 
-    /*
-     * parse first SET, restricted to 1 element
-     */
-    if( ( ret = asn1_get_tag( p, end, &set_len,
-            ASN1_CONSTRUCTED | ASN1_SET ) ) != 0 )
-        return( POLARSSL_ERR_X509_INVALID_NAME + ret );
+    /* don't use recursion, we'd risk stack overflow if not optimized */
+    while( 1 )
+    {
+        /*
+         * parse SET
+         */
+        if( ( ret = asn1_get_tag( p, end, &set_len,
+                ASN1_CONSTRUCTED | ASN1_SET ) ) != 0 )
+            return( POLARSSL_ERR_X509_INVALID_NAME + ret );
 
-    end_set  = *p + set_len;
+        end_set  = *p + set_len;
 
-    if( ( ret = x509_get_attr_type_value( p, end_set, cur ) ) != 0 )
-        return( ret );
+        while( 1 )
+        {
+            if( ( ret = x509_get_attr_type_value( p, end_set, cur ) ) != 0 )
+                return( ret );
 
-    if( *p != end_set )
-        return( POLARSSL_ERR_X509_FEATURE_UNAVAILABLE );
+            if( *p == end_set )
+                break;
 
-    /*
-     * recurse until end of SEQUENCE is reached
-     */
-    if( *p == end )
-        return( 0 );
+            /* Mark this item as being only one in a set */
+            cur->next_merged = 1;
 
-    cur->next = (x509_name *) polarssl_malloc( sizeof( x509_name ) );
+            cur->next = (x509_name *) polarssl_malloc( sizeof( x509_name ) );
 
-    if( cur->next == NULL )
-        return( POLARSSL_ERR_X509_MALLOC_FAILED );
+            if( cur->next == NULL )
+                return( POLARSSL_ERR_X509_MALLOC_FAILED );
 
-    memset( cur->next, 0, sizeof( x509_name ) );
+            memset( cur->next, 0, sizeof( x509_name ) );
 
-    return( x509_get_name( p, end, cur->next ) );
+            cur = cur->next;
+        }
+
+        /*
+         * continue until end of SEQUENCE is reached
+         */
+        if( *p == end )
+            return( 0 );
+
+        cur->next = (x509_name *) polarssl_malloc( sizeof( x509_name ) );
+
+        if( cur->next == NULL )
+            return( POLARSSL_ERR_X509_MALLOC_FAILED );
+
+        memset( cur->next, 0, sizeof( x509_name ) );
+
+        cur = cur->next;
+    }
 }
 
 /*
@@ -632,50 +652,6 @@ int x509_get_ext( unsigned char **p, const unsigned char *end,
     return( 0 );
 }
 
-#if defined(POLARSSL_FS_IO)
-/*
- * Load all data from a file into a given buffer.
- */
-int x509_load_file( const char *path, unsigned char **buf, size_t *n )
-{
-    FILE *f;
-    long size;
-
-    if( ( f = fopen( path, "rb" ) ) == NULL )
-        return( POLARSSL_ERR_X509_FILE_IO_ERROR );
-
-    fseek( f, 0, SEEK_END );
-    if( ( size = ftell( f ) ) == -1 )
-    {
-        fclose( f );
-        return( POLARSSL_ERR_X509_FILE_IO_ERROR );
-    }
-    fseek( f, 0, SEEK_SET );
-
-    *n = (size_t) size;
-
-    if( *n + 1 == 0 ||
-        ( *buf = (unsigned char *) polarssl_malloc( *n + 1 ) ) == NULL )
-    {
-        fclose( f );
-        return( POLARSSL_ERR_X509_MALLOC_FAILED );
-    }
-
-    if( fread( *buf, 1, *n, f ) != *n )
-    {
-        fclose( f );
-        polarssl_free( *buf );
-        return( POLARSSL_ERR_X509_FILE_IO_ERROR );
-    }
-
-    fclose( f );
-
-    (*buf)[*n] = '\0';
-
-    return( 0 );
-}
-#endif /* POLARSSL_FS_IO */
-
 #if defined(_MSC_VER) && !defined snprintf && !defined(EFIX64) && \
     !defined(EFI32)
 #include <stdarg.h>
@@ -736,7 +712,7 @@ int x509_dn_gets( char *buf, size_t size, const x509_name *dn )
 {
     int ret;
     size_t i, n;
-    unsigned char c;
+    unsigned char c, merge = 0;
     const x509_name *name;
     const char *short_name = NULL;
     char s[X509_MAX_DN_NAME_SIZE], *p;
@@ -757,7 +733,7 @@ int x509_dn_gets( char *buf, size_t size, const x509_name *dn )
 
         if( name != dn )
         {
-            ret = snprintf( p, n, ", " );
+            ret = snprintf( p, n, merge ? " + " : ", " );
             SAFE_SNPRINTF();
         }
 
@@ -782,6 +758,8 @@ int x509_dn_gets( char *buf, size_t size, const x509_name *dn )
         s[i] = '\0';
         ret = snprintf( p, n, "%s", s );
         SAFE_SNPRINTF();
+
+        merge = name->next_merged;
         name = name->next;
     }
 

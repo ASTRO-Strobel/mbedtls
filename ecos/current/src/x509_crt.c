@@ -1,12 +1,9 @@
 /*
  *  X.509 certificate parsing and verification
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -66,12 +63,9 @@
 #include <time.h>
 #endif
 
-#if defined(EFIX64) || defined(EFI32)
 #include <stdio.h>
-#endif
 
 #if defined(POLARSSL_FS_IO)
-#include <stdio.h>
 #if !defined(_WIN32) || defined(EFIX64) || defined(EFI32)
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -313,7 +307,7 @@ static int x509_get_ext_key_usage( unsigned char **p,
  *      nameAssigner            [0]     DirectoryString OPTIONAL,
  *      partyName               [1]     DirectoryString }
  *
- * NOTE: PolarSSL only parses and uses dNSName at this point.
+ * NOTE: we only parse and use dNSName at this point.
  */
 static int x509_get_subject_alt_name( unsigned char **p,
                                       const unsigned char *end,
@@ -359,6 +353,9 @@ static int x509_get_subject_alt_name( unsigned char **p,
         /* Allocate and assign next pointer */
         if( cur->buf.p != NULL )
         {
+            if( cur->next != NULL )
+                return( POLARSSL_ERR_X509_INVALID_EXTENSIONS );
+
             cur->next = (asn1_sequence *) polarssl_malloc(
                  sizeof( asn1_sequence ) );
 
@@ -477,6 +474,10 @@ static int x509_get_crt_ext( unsigned char **p,
 #endif
             continue;
         }
+
+        /* Forbid repeated extensions */
+        if( ( crt->ext_types & ext_type ) != 0 )
+            return( POLARSSL_ERR_X509_INVALID_EXTENSIONS );
 
         crt->ext_types |= ext_type;
 
@@ -812,8 +813,8 @@ int x509_crt_parse_der( x509_crt *chain, const unsigned char *buf,
             return( POLARSSL_ERR_X509_MALLOC_FAILED );
 
         prev = crt;
+        x509_crt_init( crt->next );
         crt = crt->next;
-        x509_crt_init( crt );
     }
 
     if( ( ret = x509_crt_parse_der_core( crt, buf, buflen ) ) != 0 )
@@ -946,7 +947,7 @@ int x509_crt_parse_file( x509_crt *chain, const char *path )
     size_t n;
     unsigned char *buf;
 
-    if( ( ret = x509_load_file( path, &buf, &n ) ) != 0 )
+    if( ( ret = pk_load_file( path, &buf, &n ) ) != 0 )
         return( ret );
 
     ret = x509_crt_parse( chain, buf, n );
@@ -986,6 +987,8 @@ int x509_crt_parse_path( x509_crt *chain, const char *path )
 
     w_ret = MultiByteToWideChar( CP_ACP, 0, filename, len, szDir,
                                  MAX_PATH - 3 );
+    if( w_ret == 0 )
+        return( POLARSSL_ERR_X509_BAD_INPUT_DATA );
 
     hFind = FindFirstFileW( szDir, &file_data );
     if( hFind == INVALID_HANDLE_VALUE )
@@ -1003,6 +1006,8 @@ int x509_crt_parse_path( x509_crt *chain, const char *path )
                                      lstrlenW( file_data.cFileName ),
                                      p, len - 1,
                                      NULL, NULL );
+        if( w_ret == 0 )
+            return( POLARSSL_ERR_X509_FILE_IO_ERROR );
 
         w_ret = x509_crt_parse_file( chain, filename );
         if( w_ret < 0 )
@@ -1629,25 +1634,34 @@ static int x509_string_cmp( const x509_buf *a, const x509_buf *b )
  */
 static int x509_name_cmp( const x509_name *a, const x509_name *b )
 {
-    if( a == NULL && b == NULL )
-        return( 0 );
-
-    if( a == NULL || b == NULL )
-        return( -1 );
-
-    /* type */
-    if( a->oid.tag != b->oid.tag ||
-        a->oid.len != b->oid.len ||
-        memcmp( a->oid.p, b->oid.p, b->oid.len ) != 0 )
+    /* Avoid recursion, it might not be optimised by the compiler */
+    while( a != NULL || b != NULL )
     {
-        return( -1 );
+        if( a == NULL || b == NULL )
+            return( -1 );
+
+        /* type */
+        if( a->oid.tag != b->oid.tag ||
+            a->oid.len != b->oid.len ||
+            memcmp( a->oid.p, b->oid.p, b->oid.len ) != 0 )
+        {
+            return( -1 );
+        }
+
+        /* value */
+        if( x509_string_cmp( &a->val, &b->val ) != 0 )
+            return( -1 );
+
+        /* structure of the list of sets */
+        if( a->next_merged != b->next_merged )
+            return( -1 );
+
+        a = a->next;
+        b = b->next;
     }
 
-    /* value */
-    if( x509_string_cmp( &a->val, &b->val ) != 0 )
-        return( -1 );
-
-    return( x509_name_cmp( a->next, b->next ) );
+    /* a == NULL == b */
+    return( 0 );
 }
 
 /*
@@ -1821,6 +1835,13 @@ static int x509_crt_verify_child(
     unsigned char hash[POLARSSL_MD_MAX_SIZE];
     x509_crt *grandparent;
     const md_info_t *md_info;
+
+    /* path_cnt is 0 for the first intermediate CA */
+    if( 1 + path_cnt > POLARSSL_X509_MAX_INTERMEDIATE_CA )
+    {
+        *flags |= BADCERT_NOT_TRUSTED;
+        return( POLARSSL_ERR_X509_CERT_VERIFY_FAILED );
+    }
 
     if( x509_time_expired( &child->valid_to ) )
         *flags |= BADCERT_EXPIRED;

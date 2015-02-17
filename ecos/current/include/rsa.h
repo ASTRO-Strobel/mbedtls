@@ -3,12 +3,9 @@
  *
  * \brief The RSA public-key cryptosystem
  *
- *  Copyright (C) 2006-2014, Brainspark B.V.
+ *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
- *
- *  All rights reserved.
+ *  This file is part of mbed TLS (https://polarssl.org)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -99,10 +96,8 @@ typedef struct
     mpi RP;                     /*!<  cached R^2 mod P  */
     mpi RQ;                     /*!<  cached R^2 mod Q  */
 
-#if !defined(POLARSSL_RSA_NO_CRT)
     mpi Vi;                     /*!<  cached blinding value     */
     mpi Vf;                     /*!<  cached un-blinding value  */
-#endif
 
     int padding;                /*!<  RSA_PKCS_V15 for 1.5 padding and
                                       RSA_PKCS_v21 for OAEP/PSS         */
@@ -190,6 +185,17 @@ int rsa_check_pubkey( const rsa_context *ctx );
  * \return         0 if successful, or an POLARSSL_ERR_RSA_XXX error code
  */
 int rsa_check_privkey( const rsa_context *ctx );
+
+/**
+ * \brief          Check a public-private RSA key pair.
+ *                 Check each of the contexts, and make sure they match.
+ *
+ * \param pub      RSA context holding the public key
+ * \param prv      RSA context holding the private key
+ *
+ * \return         0 if successful, or an POLARSSL_ERR_RSA_XXX error code
+ */
+int rsa_check_pub_priv( const rsa_context *pub, const rsa_context *prv );
 
 /**
  * \brief          Do an RSA public key operation
