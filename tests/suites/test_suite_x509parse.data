@@ -110,6 +110,10 @@ X509 Certificate information EC signed by RSA
 depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_ECP_C:POLARSSL_ECP_DP_SECP192R1_ENABLED
 x509_cert_info:"data_files/server3.crt":"cert. version     \: 3\nserial number     \: 0D\nissuer name       \: C=NL, O=PolarSSL, CN=PolarSSL Test CA\nsubject name      \: C=NL, O=PolarSSL, CN=localhost\nissued  on        \: 2013-08-09 09\:17\:03\nexpires on        \: 2023-08-07 09\:17\:03\nsigned using      \: RSA with SHA1\nEC key size       \: 192 bits\nbasic constraints \: CA=false\n"
 
+X509 Certificate information Bitstring in subject name
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_RSA_C
+x509_cert_info:"data_files/bitstring-in-dn.pem":"cert. version     \: 3\nserial number     \: 02\nissuer name       \: CN=Test CA 01, ST=Ecnivorp, C=XX, emailAddress=tca@example.com, O=Test CA Authority\nsubject name      \: C=XX, O=tca, ST=Ecnivorp, OU=TCA, CN=Client, emailAddress=client@example.com, serialNumber=7101012255, uniqueIdentifier=?7101012255\nissued  on        \: 2015-03-11 12\:06\:51\nexpires on        \: 2025-03-08 12\:06\:51\nsigned using      \: RSA with SHA1\nRSA key size      \: 2048 bits\nbasic constraints \: CA=false\nsubject alt name  \: \next key usage     \: TLS Web Client Authentication\n"
+
 X509 certificate v1 with extension
 depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_RSA_C:POLARSSL_X509_ALLOW_EXTENSIONS_NON_V3
 x509_cert_info:"data_files/cert_v1_with_ext.crt":"cert. version     \: 1\nserial number     \: BD\:ED\:44\:C7\:D2\:3E\:C2\:A4\nissuer name       \: C=XX, ST=XX, L=XX, O=XX, OU=XX, emailAddress=admin@identity-check.org, CN=identity-check.org\nsubject name      \: C=XX, ST=XX, L=XX, O=XX, OU=XX, emailAddress=admin@identity-check.org, CN=identity-check.org\nissued  on        \: 2013-07-04 16\:17\:02\nexpires on        \: 2014-07-04 16\:17\:02\nsigned using      \: RSA with SHA1\nRSA key size      \: 2048 bits\nsubject alt name  \: identity-check.org, www.identity-check.org\n"
@@ -257,6 +261,27 @@ x509_csr_info:"data_files/server9.req.sha384":"CSR version   \: 1\nsubject name 
 X509 CSR Information RSA-PSS with SHA512
 depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_X509_RSASSA_PSS_SUPPORT:POLARSSL_SHA512_C
 x509_csr_info:"data_files/server9.req.sha512":"CSR version   \: 1\nsubject name  \: C=NL, O=PolarSSL, CN=localhost\nsigned using  \: RSASSA-PSS (SHA512, MGF1-SHA512, 0x3E)\nRSA key size  \: 1024 bits\n"
+
+X509 Verify Information: empty
+x509_verify_info:0:"":""
+
+X509 Verify Information: one issue
+x509_verify_info:BADCERT_MISSING:"":"Certificate was missing\n"
+
+X509 Verify Information: two issues
+x509_verify_info:BADCERT_EXPIRED | BADCRL_EXPIRED:"":"The certificate validity has expired\nThe CRL is expired\n"
+
+X509 Verify Information: two issues, one unknown
+x509_verify_info:BADCERT_OTHER | 0x8000:"":"Other reason (can be used by verify callback)\nUnknown reason (this should not happen)\n"
+
+X509 Verify Information: empty, with prefix
+x509_verify_info:0:"  ! ":""
+
+X509 Verify Information: one issue, with prefix
+x509_verify_info:BADCERT_MISSING:"  ! ":"  ! Certificate was missing\n"
+
+X509 Verify Information: two issues, with prefix
+x509_verify_info:BADCERT_EXPIRED | BADCRL_EXPIRED:"  ! ":"  ! The certificate validity has expired\n  ! The CRL is expired\n"
 
 X509 Get Distinguished Name #1
 depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_RSA_C
@@ -543,11 +568,11 @@ depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_ECDSA_C:POLARSSL_RSA_C:POLARSSL_ECP_DP_
 x509_verify:"data_files/server8_int-ca2.crt":"data_files/test-ca.crt":"data_files/crl-ec-sha256.pem":"NULL":0:0:"NULL"
 
 X509 Certificate verification #50 (Valid, multiple CAs)
-depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_RSA_C:POLARSSL_PKCS1_V15:POLARSSL_ECP_C:POLARSSL_ECP_DP_SECP383R1_ENABLED
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_RSA_C:POLARSSL_PKCS1_V15:POLARSSL_ECP_C:POLARSSL_ECP_DP_SECP384R1_ENABLED
 x509_verify:"data_files/server2.crt":"data_files/test-ca_cat12.crt":"data_files/crl.pem":"NULL":0:0:"NULL"
 
 X509 Certificate verification #51 (Valid, multiple CAs, reverse order)
-depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_RSA_C:POLARSSL_PKCS1_V15:POLARSSL_ECP_C:POLARSSL_ECP_DP_SECP383R1_ENABLED
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_RSA_C:POLARSSL_PKCS1_V15:POLARSSL_ECP_C:POLARSSL_ECP_DP_SECP384R1_ENABLED
 x509_verify:"data_files/server2.crt":"data_files/test-ca_cat21.crt":"data_files/crl.pem":"NULL":0:0:"NULL"
 
 X509 Certificate verification #52 (CA keyUsage valid)
@@ -669,6 +694,54 @@ x509_verify:"data_files/server1.crt":"data_files/test-ca_cat12.crt":"data_files/
 X509 Certificate verification #81 (multiple CRLs, none relevant)
 depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_ECDSA_C:POLARSSL_ECP_DP_SECP384R1_ENABLED:POLARSSL_ECP_DP_SECP256R1_ENABLED:POLARSSL_SHA256_C:POLARSSL_RSA_C
 x509_verify:"data_files/enco-cert-utf8str.pem":"data_files/enco-ca-prstr.pem":"data_files/crl_cat_rsa-ec.pem":"NULL":0:0:"NULL"
+
+X509 Certificate verification callback: trusted EE cert
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_ECDSA_C:POLARSSL_SHA256_C:POLARSSL_ECP_DP_SECP256R1_ENABLED
+x509_verify_callback:"data_files/server5-selfsigned.crt":"data_files/server5-selfsigned.crt":0:"depth 0 - serial 53\:A2\:CB\:4B\:12\:4E\:AD\:83\:7D\:A8\:94\:B2 - subject CN=selfsigned, OU=testing, O=PolarSSL, C=NL\n"
+
+X509 Certificate verification callback: simple
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_SHA1_C:POLARSSL_RSA_C:POLARSSL_PKCS1_V15
+x509_verify_callback:"data_files/server1.crt":"data_files/test-ca.crt":0:"depth 1 - serial 00 - subject C=NL, O=PolarSSL, CN=PolarSSL Test CA\ndepth 0 - serial 01 - subject C=NL, O=PolarSSL, CN=PolarSSL Server 1\n"
+
+X509 Certificate verification callback: two trusted roots
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_SHA1_C:POLARSSL_RSA_C:POLARSSL_PKCS1_V15:POLARSSL_ECDSA_C:POLARSSL_ECP_DP_SECP384R1_ENABLED
+x509_verify_callback:"data_files/server1.crt":"data_files/test-ca_cat12.crt":0:"depth 1 - serial 00 - subject C=NL, O=PolarSSL, CN=PolarSSL Test CA\ndepth 0 - serial 01 - subject C=NL, O=PolarSSL, CN=PolarSSL Server 1\n"
+
+X509 Certificate verification callback: two trusted roots, reversed order
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_SHA1_C:POLARSSL_RSA_C:POLARSSL_PKCS1_V15:POLARSSL_ECDSA_C:POLARSSL_ECP_DP_SECP384R1_ENABLED
+x509_verify_callback:"data_files/server1.crt":"data_files/test-ca_cat21.crt":0:"depth 1 - serial 00 - subject C=NL, O=PolarSSL, CN=PolarSSL Test CA\ndepth 0 - serial 01 - subject C=NL, O=PolarSSL, CN=PolarSSL Server 1\n"
+
+X509 Certificate verification callback: root included
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_SHA1_C:POLARSSL_RSA_C:POLARSSL_PKCS1_V15:POLARSSL_ECDSA_C:POLARSSL_ECP_DP_SECP384R1_ENABLED
+x509_verify_callback:"data_files/server1_ca.crt":"data_files/test-ca_cat21.crt":0:"depth 1 - serial 00 - subject C=NL, O=PolarSSL, CN=PolarSSL Test CA\ndepth 0 - serial 01 - subject C=NL, O=PolarSSL, CN=PolarSSL Server 1\n"
+
+X509 Certificate verification callback: intermediate ca
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_ECDSA_C:POLARSSL_RSA_C:POLARSSL_ECP_DP_SECP256R1_ENABLED:POLARSSL_ECP_DP_SECP384R1_ENABLED:POLARSSL_PKCS1_V15:POLARSSL_SHA256_C
+x509_verify_callback:"data_files/server7_int-ca.crt":"data_files/test-ca_cat12.crt":0:"depth 2 - serial C1\:43\:E2\:7E\:62\:43\:CC\:E8 - subject C=NL, O=PolarSSL, CN=Polarssl Test EC CA\ndepth 1 - serial 0E - subject C=NL, O=PolarSSL, CN=PolarSSL Test Intermediate CA\ndepth 0 - serial 10 - subject C=NL, O=PolarSSL, CN=localhost\n"
+
+X509 Certificate verification callback: intermediate ca, root included
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_ECDSA_C:POLARSSL_RSA_C:POLARSSL_ECP_DP_SECP256R1_ENABLED:POLARSSL_ECP_DP_SECP384R1_ENABLED:POLARSSL_PKCS1_V15:POLARSSL_SHA256_C
+x509_verify_callback:"data_files/server7_int-ca_ca2.crt":"data_files/test-ca_cat12.crt":0:"depth 2 - serial C1\:43\:E2\:7E\:62\:43\:CC\:E8 - subject C=NL, O=PolarSSL, CN=Polarssl Test EC CA\ndepth 1 - serial 0E - subject C=NL, O=PolarSSL, CN=PolarSSL Test Intermediate CA\ndepth 0 - serial 10 - subject C=NL, O=PolarSSL, CN=localhost\n"
+
+X509 Certificate verification callback: intermediate ca trusted
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_ECDSA_C:POLARSSL_RSA_C:POLARSSL_ECP_DP_SECP256R1_ENABLED:POLARSSL_ECP_DP_SECP384R1_ENABLED:POLARSSL_PKCS1_V15:POLARSSL_SHA256_C
+x509_verify_callback:"data_files/server7_int-ca_ca2.crt":"data_files/test-int-ca.crt":0:"depth 1 - serial 0E - subject C=NL, O=PolarSSL, CN=PolarSSL Test Intermediate CA\ndepth 0 - serial 10 - subject C=NL, O=PolarSSL, CN=localhost\n"
+
+X509 Certificate verification callback: two intermediates
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_ECDSA_C:POLARSSL_RSA_C:POLARSSL_ECP_DP_SECP256R1_ENABLED:POLARSSL_ECP_DP_SECP384R1_ENABLED:POLARSSL_PKCS1_V15:POLARSSL_SHA256_C
+x509_verify_callback:"data_files/server10_int3_int-ca2.crt":"data_files/test-ca_cat21.crt":0:"depth 3 - serial 00 - subject C=NL, O=PolarSSL, CN=PolarSSL Test CA\ndepth 2 - serial 0F - subject C=NL, O=PolarSSL, CN=PolarSSL Test Intermediate EC CA\ndepth 1 - serial 4D - subject C=UK, O=mbed TLS, CN=mbed TLS Test intermediate CA 3\ndepth 0 - serial 4B - subject CN=localhost\n"
+
+X509 Certificate verification callback: two intermediates, root included
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_ECDSA_C:POLARSSL_RSA_C:POLARSSL_ECP_DP_SECP256R1_ENABLED:POLARSSL_ECP_DP_SECP384R1_ENABLED:POLARSSL_PKCS1_V15:POLARSSL_SHA256_C
+x509_verify_callback:"data_files/server10_int3_int-ca2_ca.crt":"data_files/test-ca_cat21.crt":0:"depth 3 - serial 00 - subject C=NL, O=PolarSSL, CN=PolarSSL Test CA\ndepth 2 - serial 0F - subject C=NL, O=PolarSSL, CN=PolarSSL Test Intermediate EC CA\ndepth 1 - serial 4D - subject C=UK, O=mbed TLS, CN=mbed TLS Test intermediate CA 3\ndepth 0 - serial 4B - subject CN=localhost\n"
+
+X509 Certificate verification callback: two intermediates, top int trusted
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_ECDSA_C:POLARSSL_RSA_C:POLARSSL_ECP_DP_SECP256R1_ENABLED:POLARSSL_ECP_DP_SECP384R1_ENABLED:POLARSSL_PKCS1_V15:POLARSSL_SHA256_C
+x509_verify_callback:"data_files/server10_int3_int-ca2.crt":"data_files/test-int-ca2.crt":0:"depth 2 - serial 0F - subject C=NL, O=PolarSSL, CN=PolarSSL Test Intermediate EC CA\ndepth 1 - serial 4D - subject C=UK, O=mbed TLS, CN=mbed TLS Test intermediate CA 3\ndepth 0 - serial 4B - subject CN=localhost\n"
+
+X509 Certificate verification callback: two intermediates, low int trusted
+depends_on:POLARSSL_PEM_PARSE_C:POLARSSL_ECDSA_C:POLARSSL_RSA_C:POLARSSL_ECP_DP_SECP256R1_ENABLED:POLARSSL_ECP_DP_SECP384R1_ENABLED:POLARSSL_PKCS1_V15:POLARSSL_SHA256_C
+x509_verify_callback:"data_files/server10_int3_int-ca2_ca.crt":"data_files/test-int-ca3.crt":0:"depth 1 - serial 4D - subject C=UK, O=mbed TLS, CN=mbed TLS Test intermediate CA 3\ndepth 0 - serial 4B - subject CN=localhost\n"
 
 X509 Parse Selftest
 depends_on:POLARSSL_SHA1_C:POLARSSL_PEM_PARSE_C:POLARSSL_CERTS_C
@@ -1051,6 +1124,38 @@ X509 CRT parse path #4 (two certs, one non-cert)
 depends_on:POLARSSL_SHA1_C:POLARSSL_RSA_C:POLARSSL_SHA256_C:POLARSSL_ECDSA_C:POLARSSL_ECP_DP_SECP384R1_ENABLED
 x509_crt_parse_path:"data_files/dir3":1:2
 
+X509 CRT verify chain #1 (zero pathlen intermediate)
+depends_on:POLARSSL_SHA256_C:POLARSSL_RSA_C
+x509_crt_verify_chain:"data_files/dir4/cert14.crt data_files/dir4/cert13.crt data_files/dir4/cert12.crt":"data_files/dir4/cert11.crt":BADCERT_NOT_TRUSTED
+
+X509 CRT verify chain #2 (zero pathlen root)
+depends_on:POLARSSL_SHA256_C:POLARSSL_RSA_C
+x509_crt_verify_chain:"data_files/dir4/cert23.crt data_files/dir4/cert22.crt":"data_files/dir4/cert21.crt":BADCERT_NOT_TRUSTED
+
+X509 CRT verify chain #3 (nonzero pathlen root)
+depends_on:POLARSSL_SHA256_C:POLARSSL_RSA_C
+x509_crt_verify_chain:"data_files/dir4/cert34.crt data_files/dir4/cert33.crt data_files/dir4/cert32.crt":"data_files/dir4/cert31.crt":BADCERT_NOT_TRUSTED
+
+X509 CRT verify chain #4 (nonzero pathlen intermediate)
+depends_on:POLARSSL_SHA256_C:POLARSSL_RSA_C
+x509_crt_verify_chain:"data_files/dir4/cert45.crt data_files/dir4/cert44.crt data_files/dir4/cert43.crt data_files/dir4/cert42.crt":"data_files/dir4/cert41.crt":BADCERT_NOT_TRUSTED
+
+X509 CRT verify chain #5 (nonzero maxpathlen intermediate)
+depends_on:POLARSSL_SHA256_C:POLARSSL_RSA_C
+x509_crt_verify_chain:"data_files/dir4/cert54.crt data_files/dir4/cert53.crt data_files/dir4/cert52.crt":"data_files/dir4/cert51.crt":0
+
+X509 CRT verify chain #6 (nonzero maxpathlen root)
+depends_on:POLARSSL_SHA256_C:POLARSSL_RSA_C
+x509_crt_verify_chain:"data_files/dir4/cert63.crt data_files/dir4/cert62.crt":"data_files/dir4/cert61.crt":0
+
+X509 CRT verify chain #7 (maxpathlen root, self signed in path)
+depends_on:POLARSSL_SHA256_C:POLARSSL_RSA_C
+x509_crt_verify_chain:"data_files/dir4/cert74.crt data_files/dir4/cert73.crt data_files/dir4/cert72.crt":"data_files/dir4/cert71.crt":0
+
+X509 CRT verify chain #8 (self signed maxpathlen root)
+depends_on:POLARSSL_SHA256_C:POLARSSL_RSA_C
+x509_crt_verify_chain:"data_files/dir4/cert61.crt data_files/dir4/cert63.crt data_files/dir4/cert62.crt":"data_files/dir4/cert61.crt":0
+
 X509 OID description #1
 x509_oid_desc:"2B06010505070301":"TLS Web Server Authentication"
 
@@ -1330,3 +1435,7 @@ x509parse_crt_file:"data_files/server7_pem_space.crt":1
 X509 File parse (all certificates fail)
 depends_on:POLARSSL_ECP_C
 x509parse_crt_file:"data_files/server7_all_space.crt":POLARSSL_ERR_PEM_INVALID_DATA + POLARSSL_ERR_BASE64_INVALID_CHARACTER
+
+X509 File parse (trailing spaces, OK)
+depends_on:POLARSSL_ECP_C:POLARSSL_ECP_DP_SECP256R1_ENABLED
+x509parse_crt_file:"data_files/server7_trailing_space.crt":0
