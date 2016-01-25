@@ -492,6 +492,12 @@ static int ssl_parse_signature_algorithms_ext( ssl_context *ssl,
      * So, just look at the HashAlgorithm part.
      */
     for( md_cur = md_list(); *md_cur != POLARSSL_MD_NONE; md_cur++ ) {
+#if !defined(POLARSSL_SSL_ENABLE_MD5_SIGNATURES)
+        /* Skip MD5 */
+        if( *md_cur == POLARSSL_MD_MD5 )
+            continue;
+#endif
+
         for( p = buf + 2; p < end; p += 2 ) {
             if( *md_cur == (int) ssl_md_alg_from_hash( p[0] ) ) {
                 ssl->handshake->sig_alg = p[0];
@@ -2409,7 +2415,9 @@ static int ssl_write_certificate_request( ssl_context *ssl )
     {
         dn_size = crt->subject_raw.len;
 
-        if( end < p || (size_t)( end - p ) < 2 + dn_size )
+        if( end < p ||
+            (size_t)( end - p ) < dn_size ||
+            (size_t)( end - p ) < 2 + dn_size )
         {
             SSL_DEBUG_MSG( 1, ( "skipping CAs: buffer too short" ) );
             break;
