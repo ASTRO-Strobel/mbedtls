@@ -47,7 +47,9 @@ cdl_package CYGPKG_POLARSSL {
 			display "Additional compiler flags"
 			flavor data
 			no_define
-			default_value { "-D__ECOS" }
+            default_value { (CYGPKG_MEMWATCH ? 
+                 "-D__ECOS -DMEMWATCH -include string.h -include memwatch.h" : 
+                 "-D__ECOS") }
 			description "additional compiler flags for PolarSSL"
 		}
 		
