@@ -475,7 +475,12 @@ int net_accept( int bind_fd, int *client_fd, void *client_ip )
  */
 int net_set_block( int fd )
 {
-#if ( defined(_WIN32) || defined(_WIN32_WCE) ) && !defined(EFIX64) && \
+#if defined (__ECOS)
+
+    int yes = 0;
+    return ioctl(fd, FIONBIO, &yes);
+
+#elif ( defined(_WIN32) || defined(_WIN32_WCE) ) && !defined(EFIX64) && \
     !defined(EFI32)
     u_long n = 0;
     return( ioctlsocket( fd, FIONBIO, &n ) );
@@ -486,7 +491,12 @@ int net_set_block( int fd )
 
 int net_set_nonblock( int fd )
 {
-#if ( defined(_WIN32) || defined(_WIN32_WCE) ) && !defined(EFIX64) && \
+#if defined (__ECOS)
+
+    int yes = 1;
+    return ioctl(fd, FIONBIO, &yes);
+
+#elif ( defined(_WIN32) || defined(_WIN32_WCE) ) && !defined(EFIX64) && \
     !defined(EFI32)
     u_long n = 1;
     return( ioctlsocket( fd, FIONBIO, &n ) );
