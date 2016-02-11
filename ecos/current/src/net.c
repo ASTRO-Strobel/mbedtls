@@ -398,12 +398,22 @@ static int net_would_block( int fd )
 static int net_would_block( int fd )
 {
     /*
-     * Never return 'WOULD BLOCK' on a non-blocking socket
+     * Never return 'WOULD BLOCK' on a blocking socket
      */
+#if defined(__ECOS)
+    // eCos does not support fcntl for this purpose
+    int myerrno = errno;
+    int flag;
+    if (ioctl(fd, FIONBIO_STATE, &flag) < 0)
+        return( 0 );
+    if (!flag)
+        return ( 0 );
+    switch ( myerrno )
+#else
     if( ( fcntl( fd, F_GETFL ) & O_NONBLOCK ) != O_NONBLOCK )
         return( 0 );
-
     switch( errno )
+#endif
     {
 #if defined EAGAIN
         case EAGAIN:
