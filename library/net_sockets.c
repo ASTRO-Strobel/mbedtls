@@ -276,11 +276,19 @@ static int net_would_block( const mbedtls_net_context *ctx )
     /*
      * Never return 'WOULD BLOCK' on a non-blocking socket
      */
+#if defined (__ECOS)
+	int flag;
+	if (ioctl(ctx->fd, FIONBIO_STATE, &flag) < 0)
+		return( 0 );
+	if (!flag)
+		return ( 0 );
+#else
     if( ( fcntl( ctx->fd, F_GETFL ) & O_NONBLOCK ) != O_NONBLOCK )
     {
         errno = err;
         return( 0 );
     }
+#endif
 
     switch( errno = err )
     {
@@ -419,7 +427,12 @@ int mbedtls_net_accept( mbedtls_net_context *bind_ctx,
  */
 int mbedtls_net_set_block( mbedtls_net_context *ctx )
 {
-#if ( defined(_WIN32) || defined(_WIN32_WCE) ) && !defined(EFIX64) && \
+#if defined (__ECOS)
+
+	int yes = 0;
+    return ioctl(ctx->fd, FIONBIO, &yes);
+
+#elif ( defined(_WIN32) || defined(_WIN32_WCE) ) && !defined(EFIX64) && \
     !defined(EFI32)
     u_long n = 0;
     return( ioctlsocket( ctx->fd, FIONBIO, &n ) );
@@ -430,7 +443,12 @@ int mbedtls_net_set_block( mbedtls_net_context *ctx )
 
 int mbedtls_net_set_nonblock( mbedtls_net_context *ctx )
 {
-#if ( defined(_WIN32) || defined(_WIN32_WCE) ) && !defined(EFIX64) && \
+#if defined (__ECOS)
+
+	int yes = 1;
+    return ioctl(ctx->fd, FIONBIO, &yes);
+
+#elif ( defined(_WIN32) || defined(_WIN32_WCE) ) && !defined(EFIX64) && \
     !defined(EFI32)
     u_long n = 1;
     return( ioctlsocket( ctx->fd, FIONBIO, &n ) );

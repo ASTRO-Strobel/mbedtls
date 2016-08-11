@@ -58,6 +58,8 @@
 #define mbedtls_free       free
 #endif
 
+#include "mbedtls/my_init_mbedtls.h"
+
 /* Implementation that should never be optimized out by the compiler */
 static void mbedtls_mpi_zeroize( mbedtls_mpi_uint *v, size_t n ) {
     volatile mbedtls_mpi_uint *p = v; while( n-- ) *p++ = 0;
@@ -1201,8 +1203,10 @@ int mbedtls_mpi_mul_mpi( mbedtls_mpi *X, const mbedtls_mpi *A, const mbedtls_mpi
     MBEDTLS_MPI_CHK( mbedtls_mpi_grow( X, i + j ) );
     MBEDTLS_MPI_CHK( mbedtls_mpi_lset( X, 0 ) );
 
+    cyg_mutex_lock(&mutex_mpi_mul);
     for( i++; j > 0; j-- )
         mpi_mul_hlp( i - 1, A->p, X->p + j - 1, B->p[j - 1] );
+    cyg_mutex_unlock(&mutex_mpi_mul);
 
     X->s = A->s * B->s;
 
@@ -1571,6 +1575,7 @@ static int mpi_montmul( mbedtls_mpi *A, const mbedtls_mpi *B, const mbedtls_mpi 
     n = N->n;
     m = ( B->n < n ) ? B->n : n;
 
+    cyg_mutex_lock(&mutex_mpi_mul);
     for( i = 0; i < n; i++ )
     {
         /*
@@ -1584,6 +1589,7 @@ static int mpi_montmul( mbedtls_mpi *A, const mbedtls_mpi *B, const mbedtls_mpi 
 
         *d++ = u0; d[n + 1] = 0;
     }
+    cyg_mutex_unlock(&mutex_mpi_mul);
 
     memcpy( A->p, d, ( n + 1 ) * ciL );
 
