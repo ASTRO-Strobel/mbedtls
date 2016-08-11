@@ -31,6 +31,7 @@
 
 #include <pkgconf/system.h>
 #include <cyg/hal/system.h>
+#include "mbedtls/my_init_mbedtls.h"
 
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_DEPRECATE)
 #define _CRT_SECURE_NO_DEPRECATE 1
@@ -1131,7 +1132,9 @@
  * a timing side-channel.
  *
  */
-//#define MBEDTLS_SSL_DEBUG_ALL
+#ifdef MBEDTLS_DEBUG_ENABLE
+#define MBEDTLS_SSL_DEBUG_ALL
+#endif
 
 /** \def MBEDTLS_SSL_ENCRYPT_THEN_MAC
  *
@@ -1898,7 +1901,9 @@
  *
  * This module provides debugging functions.
  */
+#ifdef MBEDTLS_DEBUG_ENABLE
 #define MBEDTLS_DEBUG_C
+#endif
 
 /**
  * \def MBEDTLS_DES_C
