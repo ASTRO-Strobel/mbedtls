@@ -386,7 +386,9 @@ int mbedtls_pem_read_buffer( mbedtls_pem_context *ctx, const char *header, const
 void mbedtls_pem_free( mbedtls_pem_context *ctx )
 {
     mbedtls_free( ctx->buf );
-    mbedtls_free( ctx->info );
+    if ( ctx->info != NULL ) {
+    	mbedtls_free( ctx->info );
+    }
 
     mbedtls_zeroize( ctx, sizeof( mbedtls_pem_context ) );
 }
