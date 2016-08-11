@@ -430,7 +430,9 @@ void mbedtls_pem_free( mbedtls_pem_context *ctx )
     if( ctx->buf != NULL )
         mbedtls_zeroize( ctx->buf, ctx->buflen );
     mbedtls_free( ctx->buf );
-    mbedtls_free( ctx->info );
+    if ( ctx->info != NULL ) {
+    	mbedtls_free( ctx->info );
+    }
 
     mbedtls_zeroize( ctx, sizeof( mbedtls_pem_context ) );
 }

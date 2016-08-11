@@ -7553,7 +7553,9 @@ void mbedtls_ssl_handshake_free( mbedtls_ssl_handshake_params *handshake )
 #if defined(MBEDTLS_ECDH_C) || defined(MBEDTLS_ECDSA_C) || \
     defined(MBEDTLS_KEY_EXCHANGE_ECJPAKE_ENABLED)
     /* explicit void pointer cast for buggy MS compiler */
-    mbedtls_free( (void *) handshake->curves );
+    if ( handshake->curves != NULL ) {
+    	mbedtls_free( (void *) handshake->curves );
+    }
 #endif
 
 #if defined(MBEDTLS_KEY_EXCHANGE__SOME__PSK_ENABLED)
@@ -7606,7 +7608,9 @@ void mbedtls_ssl_session_free( mbedtls_ssl_session *session )
 #endif
 
 #if defined(MBEDTLS_SSL_SESSION_TICKETS) && defined(MBEDTLS_SSL_CLI_C)
-    mbedtls_free( session->ticket );
+    if ( session->ticket != NULL ) {
+    	mbedtls_free( session->ticket );
+    }
 #endif
 
     mbedtls_zeroize( session, sizeof( mbedtls_ssl_session ) );
