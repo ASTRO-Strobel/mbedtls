@@ -31,7 +31,6 @@
 
 #include <pkgconf/system.h>
 #include <cyg/hal/system.h>
-#include <pkgconf/polarssl.h>
 
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_DEPRECATE)
 #define _CRT_SECURE_NO_DEPRECATE 1
