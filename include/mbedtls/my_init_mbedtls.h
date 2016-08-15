@@ -29,10 +29,15 @@
 #include "mbedtls/platform.h"
 
 // some compatibilty - code: now IPv6 is non-optional, cause MBEDTLS_NET_C requires it
-#include "mbedtls/config.h"
+/* BUT: This runs into errors:
+ * ip6stat in lib_os/.../bsd_tcpip/.../sys/param.h is #define'd to be 'cyg_ip6stat'
+ * nowhere to be defined!
 #ifdef MBEDTLS_NET_C
 #define CYGPKG_NET_INET6
 #endif
+ */
+// but config.h cannot hurt anyway!
+#include "mbedtls/config.h"
 
 __externC cyg_mutex_t mutex_mpi_mul;
 
