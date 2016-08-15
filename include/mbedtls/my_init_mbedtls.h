@@ -1,6 +1,9 @@
 #ifndef MY_INIT_MBEDTLS_H
 #define MY_INIT_MBEDTLS_H
 
+// Uncomment this to disable SSL (via mbed TLS)
+#define USE_MBEDTLS 1
+
 /* following 3 defines were defined in
  * lib_os/ecos/ecos-current/packages/net/polarssl/current/cdl/polarssl.cdl
  * to be used in
@@ -11,16 +14,25 @@
 	This really hurts performance and it also introduces a side-channel
 	attack and should thus not be left enabled in production code."
  */
-#define MBEDTLS_DEBUG_ENABLE 0
+#define MBEDTLS_DEBUG_ENABLE 1
 // "This option sets the debug level to use...
 //  Use 2 for medium detail, 4 for lots of info."
-#define NUM_MBEDTLS_DEBUG_LEVEL 0
-#define NUM_MBEDTLS_DEBUG_LEVEL_0
+#define NUM_MBEDTLS_DEBUG_LEVEL 2
+#define NUM_MBEDTLS_DEBUG_LEVEL_2
 
 // FIXXME: Missing:
 // CYGPKG_MEMWATCH ? "-DMEMWATCH -include string.h -include memwatch.h"
 
 #include <cyg/kernel/kapi.h>
+
+// required to define mbedtls_time_t
+#include "mbedtls/platform.h"
+
+// some compatibilty - code: now IPv6 is non-optional, cause MBEDTLS_NET_C requires it
+#include "mbedtls/config.h"
+#ifdef MBEDTLS_NET_C
+#define CYGPKG_NET_INET6
+#endif
 
 __externC cyg_mutex_t mutex_mpi_mul;
 
