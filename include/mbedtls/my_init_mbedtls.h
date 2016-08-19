@@ -17,8 +17,8 @@
 #define MBEDTLS_DEBUG_ENABLE 1
 // "This option sets the debug level to use...
 //  Use 2 for medium detail, 4 for lots of info."
-#define NUM_MBEDTLS_DEBUG_LEVEL 2
-#define NUM_MBEDTLS_DEBUG_LEVEL_2
+#define NUM_MBEDTLS_DEBUG_LEVEL 1
+#define NUM_MBEDTLS_DEBUG_LEVEL_1
 
 // FIXXME: Missing:
 // CYGPKG_MEMWATCH ? "-DMEMWATCH -include string.h -include memwatch.h"
