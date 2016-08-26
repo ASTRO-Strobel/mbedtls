@@ -14,7 +14,7 @@
 	This really hurts performance and it also introduces a side-channel
 	attack and should thus not be left enabled in production code."
  */
-#define MBEDTLS_DEBUG_ENABLE 1
+#define MBEDTLS_DEBUG_ENABLE 0
 // "This option sets the debug level to use...
 //  Use 2 for medium detail, 4 for lots of info."
 #define NUM_MBEDTLS_DEBUG_LEVEL 1
