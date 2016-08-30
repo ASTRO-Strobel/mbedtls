@@ -59,6 +59,7 @@ patch_config:
 		MBEDTLS_DES_C						\
 		MBEDTLS_PADLOCK_C					\
 		MBEDTLS_XTEA_C						\
+		MBEDTLS_HAVE_TIME_DATE				\
 		| xargs -n 1 scripts/config.pl \
 			-f include/mbedtls/config.h \
 			unset
