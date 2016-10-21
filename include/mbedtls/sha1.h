@@ -37,6 +37,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define MBEDTLS_ERR_SHA1_FILE_IO_ERROR                    -0x0076  /**< Read/write error in file. */
 #define MBEDTLS_ERR_SHA1_HW_ACCEL_FAILED                  -0x0035  /**< SHA-1 hardware accelerator failed */
 
 #if !defined(MBEDTLS_SHA1_ALT)
@@ -302,6 +303,16 @@ MBEDTLS_DEPRECATED void mbedtls_sha1( const unsigned char *input,
 
 #undef MBEDTLS_DEPRECATED
 #endif /* !MBEDTLS_DEPRECATED_REMOVED */
+
+/**
+ * \brief          Output = SHA-1( file contents )
+ *
+ * \param path     input file name
+ * \param output   SHA-1 checksum result
+ *
+ * \return         0 if successful, or MBEDTLS_ERR_SHA1_FILE_IO_ERROR
+ */
+int mbedtls_sha1_file( const char *path, unsigned char output[20] );
 
 /**
  * \brief          The SHA-1 checkup routine.

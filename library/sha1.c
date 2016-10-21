@@ -450,6 +450,41 @@ void mbedtls_sha1( const unsigned char *input,
 }
 #endif
 
+/*
+ * mbedtls_sha1_file: function to calculate sha1 of a file
+ * copied from polarssl sha1_file (seems missing in embedtls)
+ *
+ * output = SHA-1( file contents )
+ */
+int mbedtls_sha1_file( const char *path, unsigned char output[20] )
+{
+    FILE *f;
+    size_t n;
+    mbedtls_sha1_context ctx;
+    unsigned char buf[1024];
+
+    if( ( f = fopen( path, "rb" ) ) == NULL )
+        return( MBEDTLS_ERR_SHA1_FILE_IO_ERROR );
+
+    mbedtls_sha1_init( &ctx );
+    mbedtls_sha1_starts( &ctx );
+
+    while( ( n = fread( buf, 1, sizeof( buf ), f ) ) > 0 )
+    	mbedtls_sha1_update( &ctx, buf, n );
+
+    mbedtls_sha1_finish( &ctx, output );
+    mbedtls_sha1_free( &ctx );
+
+    if( ferror( f ) != 0 )
+    {
+        fclose( f );
+        return( MBEDTLS_ERR_SHA1_FILE_IO_ERROR );
+    }
+
+    fclose( f );
+    return( 0 );
+}
+
 #if defined(MBEDTLS_SELF_TEST)
 /*
  * FIPS-180-1 test vectors
