@@ -32,6 +32,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define MBEDTLS_ERR_SHA1_FILE_IO_ERROR                -0x0076  /**< Read/write error in file. */
+
 #if !defined(MBEDTLS_SHA1_ALT)
 // Regular implementation
 //
@@ -114,13 +116,23 @@ extern "C" {
 #endif
 
 /**
- * \brief          Output = SHA-1( input buffer )
+ * \brief          Output = SHA-1( input buffer ) (this function was copied from polarssl!)
  *
  * \param input    buffer holding the  data
  * \param ilen     length of the input data
  * \param output   SHA-1 checksum result
  */
 void mbedtls_sha1( const unsigned char *input, size_t ilen, unsigned char output[20] );
+
+/**
+ * \brief          Output = SHA-1( file contents )
+ *
+ * \param path     input file name
+ * \param output   SHA-1 checksum result
+ *
+ * \return         0 if successful, or MBEDTLS_ERR_SHA1_FILE_IO_ERROR
+ */
+int mbedtls_sha1_file( const char *path, unsigned char output[20] );
 
 /**
  * \brief          Checkup routine
