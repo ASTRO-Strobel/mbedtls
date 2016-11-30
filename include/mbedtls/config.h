@@ -29,9 +29,11 @@
 #ifndef MBEDTLS_CONFIG_H
 #define MBEDTLS_CONFIG_H
 
+#if !defined(BARE_MBEDTLS_APPLICATION)
 #include <pkgconf/system.h>
 #include <cyg/hal/system.h>
 #include "mbedtls/my_init_mbedtls.h"
+#endif
 
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_DEPRECATE)
 #define _CRT_SECURE_NO_DEPRECATE 1
