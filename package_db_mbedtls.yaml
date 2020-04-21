@@ -1,0 +1,25 @@
+#####################################################
+# see util/license_checker/package_db_description.txt
+#####################################################
+
+---
+libraries:
+- name: mbedtls
+  package-directories:
+  - mbedtls
+  package-linker-name: mbedtls
+  resulting-libraries:
+  - libmbedtls.a
+  - libmbedcrypto.a
+  - libmbedx509.a
+  license-possibilities:
+    "Apache2.0":
+    - license-file: mbedtls/LICENSE
+      license-hash-sha1: 4d6c5af1a9cc4eaab3b93353fc166d8e29c150c6
+    - license-file: mbedtls/apache-2.0.txt
+      license-hash-sha1: 2b8b815229aa8a61e483fb4ba0588b8b6c491890
+    "GPLv2":
+    - license-file: mbedtls/LICENSE-GPL2
+      license-hash-sha1: 350915259aa686a10f098463422e0f65c9068adb
+    - license-file: mbedtls/gpl-2.0.txt
+      license-hash-sha1: 4cc77b90af91e615a64ae04893fdffa7939db84c
