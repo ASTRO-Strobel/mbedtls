@@ -108,6 +108,7 @@ int main( void )
 #define DFL_FALLBACK            -1
 #define DFL_EXTENDED_MS         -1
 #define DFL_ETM                 -1
+#define DFL_SKIP_CLOSE_NOTIFY   0
 
 #define GET_REQUEST "GET %s HTTP/1.0\r\nExtra-header: "
 #define GET_REQUEST_END "\r\n\r\n"
@@ -256,6 +257,7 @@ int main( void )
     "                        options: 1 (non-blocking), 2 (added delays)\n" \
     "    read_timeout=%%d     default: 0 ms (no timeout)\n"    \
     "    max_resend=%%d       default: 0 (no resend on timeout)\n" \
+    "    skip_close_notify=%%d default: 0 (send close_notify)\n" \
     "\n"                                                    \
     USAGE_DTLS                                              \
     "\n"                                                    \
@@ -344,6 +346,7 @@ struct options
     int fallback;               /* is this a fallback connection?           */
     int extended_ms;            /* negotiate extended master secret?        */
     int etm;                    /* negotiate encrypt then mac?              */
+    int skip_close_notify;      /* skip sending the close_notify alert      */
 } opt;
 
 static void my_debug( void *ctx, int level,
@@ -562,6 +565,7 @@ int main( int argc, char *argv[] )
     opt.fallback            = DFL_FALLBACK;
     opt.extended_ms         = DFL_EXTENDED_MS;
     opt.etm                 = DFL_ETM;
+    opt.skip_close_notify   = DFL_SKIP_CLOSE_NOTIFY;
 
     for( i = 1; i < argc; i++ )
     {
@@ -864,6 +868,12 @@ int main( int argc, char *argv[] )
             if( opt.dhmlen < 0 )
                 goto usage;
         }
+        else if( strcmp( p, "skip_close_notify" ) == 0 )
+        {
+            opt.skip_close_notify = atoi( q );
+            if( opt.skip_close_notify < 0 || opt.skip_close_notify > 1 )
+                goto usage;
+        }
         else
             goto usage;
     }
@@ -1072,20 +1082,20 @@ int main( int argc, char *argv[] )
     mbedtls_printf( "  . Loading the CA root certificate ..." );
     fflush( stdout );
 
+    if( strcmp( opt.ca_path, "none" ) == 0 ||
+        strcmp( opt.ca_file, "none" ) == 0 )
+    {
+        ret = 0;
+    }
+    else
 #if defined(MBEDTLS_FS_IO)
     if( strlen( opt.ca_path ) )
-        if( strcmp( opt.ca_path, "none" ) == 0 )
-            ret = 0;
-        else
-            ret = mbedtls_x509_crt_parse_path( &cacert, opt.ca_path );
+        ret = mbedtls_x509_crt_parse_path( &cacert, opt.ca_path );
     else if( strlen( opt.ca_file ) )
-        if( strcmp( opt.ca_file, "none" ) == 0 )
-            ret = 0;
-        else
-            ret = mbedtls_x509_crt_parse_file( &cacert, opt.ca_file );
+        ret = mbedtls_x509_crt_parse_file( &cacert, opt.ca_file );
     else
 #endif
-#if defined(MBEDTLS_CERTS_C)
+#if defined(MBEDTLS_CERTS_C) && defined(MBEDTLS_PEM_PARSE_C)
         for( i = 0; mbedtls_test_cas[i] != NULL; i++ )
         {
             ret = mbedtls_x509_crt_parse( &cacert,
@@ -1097,9 +1107,13 @@ int main( int argc, char *argv[] )
 #else
     {
         ret = 1;
-        mbedtls_printf("MBEDTLS_CERTS_C not defined.");
+#if !defined(MBEDTLS_CERTS_C)
+        mbedtls_printf( "MBEDTLS_CERTS_C not defined." );
+#else
+        mbedtls_printf( "All test CRTs loaded via MBEDTLS_CERTS_C are PEM-encoded, but MBEDTLS_PEM_PARSE_C is disabled." );
     }
-#endif
+#endif /* MBEDTLS_CERTS_C */
+#endif /* MBEDTLS_CERTS_C && MBEDTLS_PEM_PARSE_C */
     if( ret < 0 )
     {
         mbedtls_printf( " failed\n  !  mbedtls_x509_crt_parse returned -0x%x\n\n", -ret );
@@ -1116,46 +1130,54 @@ int main( int argc, char *argv[] )
     mbedtls_printf( "  . Loading the client cert. and key..." );
     fflush( stdout );
 
+    if( strcmp( opt.crt_file, "none" ) == 0 )
+        ret = 0;
+    else
 #if defined(MBEDTLS_FS_IO)
     if( strlen( opt.crt_file ) )
-        if( strcmp( opt.crt_file, "none" ) == 0 )
-            ret = 0;
-        else
-            ret = mbedtls_x509_crt_parse_file( &clicert, opt.crt_file );
+        ret = mbedtls_x509_crt_parse_file( &clicert, opt.crt_file );
     else
 #endif
-#if defined(MBEDTLS_CERTS_C)
+#if defined(MBEDTLS_CERTS_C) && defined(MBEDTLS_PEM_PARSE_C)
         ret = mbedtls_x509_crt_parse( &clicert, (const unsigned char *) mbedtls_test_cli_crt,
                 mbedtls_test_cli_crt_len );
 #else
     {
         ret = 1;
-        mbedtls_printf("MBEDTLS_CERTS_C not defined.");
+#if !defined(MBEDTLS_CERTS_C)
+        mbedtls_printf( "MBEDTLS_CERTS_C not defined." );
+#else
+        mbedtls_printf( "All test CRTs loaded via MBEDTLS_CERTS_C are PEM-encoded, but MBEDTLS_PEM_PARSE_C is disabled." );
     }
-#endif
+#endif /* MBEDTLS_CERTS_C */
+#endif /* MBEDTLS_CERTS_C && MBEDTLS_PEM_PARSE_C */
     if( ret != 0 )
     {
         mbedtls_printf( " failed\n  !  mbedtls_x509_crt_parse returned -0x%x\n\n", -ret );
         goto exit;
     }
 
+    if( strcmp( opt.key_file, "none" ) == 0 )
+        ret = 0;
+    else
 #if defined(MBEDTLS_FS_IO)
     if( strlen( opt.key_file ) )
-        if( strcmp( opt.key_file, "none" ) == 0 )
-            ret = 0;
-        else
-            ret = mbedtls_pk_parse_keyfile( &pkey, opt.key_file, "" );
+        ret = mbedtls_pk_parse_keyfile( &pkey, opt.key_file, "" );
     else
 #endif
-#if defined(MBEDTLS_CERTS_C)
+#if defined(MBEDTLS_CERTS_C) && defined(MBEDTLS_PEM_PARSE_C)
         ret = mbedtls_pk_parse_key( &pkey, (const unsigned char *) mbedtls_test_cli_key,
                 mbedtls_test_cli_key_len, NULL, 0 );
 #else
     {
         ret = 1;
-        mbedtls_printf("MBEDTLS_CERTS_C not defined.");
+#if !defined(MBEDTLS_CERTS_C)
+        mbedtls_printf( "MBEDTLS_CERTS_C not defined." );
+#else
+        mbedtls_printf( "All test keys loaded via MBEDTLS_CERTS_C are PEM-encoded, but MBEDTLS_PEM_PARSE_C is disabled." );
     }
-#endif
+#endif /* MBEDTLS_CERTS_C */
+#endif /* MBEDTLS_CERTS_C && MBEDTLS_PEM_PARSE_C */
     if( ret != 0 )
     {
         mbedtls_printf( " failed\n  !  mbedtls_pk_parse_key returned -0x%x\n\n", -ret );
@@ -1721,10 +1743,25 @@ close_notify:
     mbedtls_printf( "  . Closing the connection..." );
     fflush( stdout );
 
-    /* No error checking, the connection might be closed already */
-    do ret = mbedtls_ssl_close_notify( &ssl );
-    while( ret == MBEDTLS_ERR_SSL_WANT_WRITE );
-    ret = 0;
+    /*
+     * Most of the time sending a close_notify before closing is the right
+     * thing to do. However, when the server already knows how many messages
+     * are expected and closes the connection by itself, this alert becomes
+     * redundant. Sometimes with DTLS this redundancy becomes a problem by
+     * leading to a race condition where the server might close the connection
+     * before seeing the alert, and since UDP is connection-less when the
+     * alert arrives it will be seen as a new connection, which will fail as
+     * the alert is clearly not a valid ClientHello. This may cause spurious
+     * failures in tests that use DTLS and resumption with ssl_server2 in
+     * ssl-opt.sh, avoided by enabling skip_close_notify client-side.
+     */
+    if( opt.skip_close_notify == 0 )
+    {
+        /* No error checking, the connection might be closed already */
+        do ret = mbedtls_ssl_close_notify( &ssl );
+        while( ret == MBEDTLS_ERR_SSL_WANT_WRITE );
+        ret = 0;
+    }
 
     mbedtls_printf( " done\n" );
 

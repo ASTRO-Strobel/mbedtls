@@ -121,7 +121,7 @@ pre_initialize_variables () {
     KEEP_GOING=0
     YOTTA=1
 
-    # Default commands, can be overriden by the environment
+    # Default commands, can be overridden by the environment
     : ${OPENSSL:="openssl"}
     : ${OPENSSL_LEGACY:="$OPENSSL"}
     : ${GNUTLS_CLI:="gnutls-cli"}
@@ -136,6 +136,9 @@ pre_initialize_variables () {
     if [ -z "${MAKEFLAGS+set}" ]; then
         export MAKEFLAGS="-j"
     fi
+
+    # CFLAGS and LDFLAGS for Asan builds that don't use CMake
+    ASAN_CFLAGS='-Werror -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all'
 
     # Gather the list of available components. These are the functions
     # defined in this script whose name starts with "component_".
@@ -578,7 +581,7 @@ component_check_files () {
 
 component_check_names () {
     msg "test/build: declared and exported names" # < 3s
-    record_status tests/scripts/check-names.sh
+    record_status tests/scripts/check-names.sh -v
 }
 
 component_check_doxygen_warnings () {
@@ -590,6 +593,34 @@ component_check_doxygen_warnings () {
 ################################################################
 #### Build and test many configurations and targets
 ################################################################
+
+component_test_large_ecdsa_key_signature () {
+
+    SMALL_MPI_MAX_SIZE=136 # Small enough to interfere with the EC signatures
+
+    msg "build: cmake + MBEDTLS_MPI_MAX_SIZE=${SMALL_MPI_MAX_SIZE}, gcc, ASan" # ~ 1 min 50s
+    scripts/config.pl set MBEDTLS_MPI_MAX_SIZE $SMALL_MPI_MAX_SIZE
+    CC=gcc cmake -D CMAKE_BUILD_TYPE:String=Asan .
+    make
+
+    INEVITABLY_PRESENT_FILE=Makefile
+    SIGNATURE_FILE="${INEVITABLY_PRESENT_FILE}.sig" # Warning, this is rm -f'ed below
+
+    msg "test: pk_sign secp521r1_prv.der for MBEDTLS_MPI_MAX_SIZE=${SMALL_MPI_MAX_SIZE} (ASan build)" # ~ 5s
+    if_build_succeeded programs/pkey/pk_sign tests/data_files/secp521r1_prv.der $INEVITABLY_PRESENT_FILE
+    rm -f $SIGNATURE_FILE
+}
+
+component_test_default_out_of_box () {
+    msg "build: make, default config (out-of-box)" # ~1min
+    make
+
+    msg "test: main suites make, default config (out-of-box)" # ~10s
+    make test
+
+    msg "selftest: make, default config (out-of-box)" # ~10s
+    programs/test/selftest
+}
 
 component_build_yotta () {
     # Note - use of yotta is deprecated, and yotta also requires armcc to be on the
@@ -614,6 +645,61 @@ component_test_default_cmake_gcc_asan () {
 
     msg "test: compat.sh (ASan build)" # ~ 6 min
     if_build_succeeded tests/compat.sh
+}
+
+component_test_full_cmake_gcc_asan () {
+    msg "build: full config, cmake, gcc, ASan"
+    scripts/config.pl full
+    CC=gcc cmake -D CMAKE_BUILD_TYPE:String=Asan .
+    make
+
+    msg "test: main suites (inc. selftests) (full config, ASan build)"
+    make test
+
+    msg "test: ssl-opt.sh (full config, ASan build)"
+    if_build_succeeded tests/ssl-opt.sh
+
+    msg "test: compat.sh (full config, ASan build)"
+    if_build_succeeded tests/compat.sh
+}
+
+component_test_zlib_make() {
+    msg "build: zlib enabled, make"
+    scripts/config.pl set MBEDTLS_ZLIB_SUPPORT
+    make ZLIB=1 CFLAGS='-Werror -O1'
+
+    msg "test: main suites (zlib, make)"
+    make test
+
+    msg "test: ssl-opt.sh (zlib, make)"
+    if_build_succeeded tests/ssl-opt.sh
+}
+support_test_zlib_make () {
+    base=support_test_zlib_$$
+    cat <<'EOF' > ${base}.c
+#include "zlib.h"
+int main(void) { return 0; }
+EOF
+    gcc -o ${base}.exe ${base}.c -lz 2>/dev/null
+    ret=$?
+    rm -f ${base}.*
+    return $ret
+}
+
+component_test_zlib_cmake() {
+    msg "build: zlib enabled, cmake"
+    scripts/config.pl set MBEDTLS_ZLIB_SUPPORT
+    cmake -D ENABLE_ZLIB_SUPPORT=On -D CMAKE_BUILD_TYPE:String=Check .
+    make
+
+    msg "test: main suites (zlib, cmake)"
+    make test
+
+    msg "test: ssl-opt.sh (zlib, cmake)"
+    if_build_succeeded tests/ssl-opt.sh
+}
+support_test_zlib_cmake () {
+    support_test_zlib_make "$@"
 }
 
 component_test_ref_configs () {
@@ -671,7 +757,6 @@ component_test_rsa_no_crt () {
 component_test_full_cmake_clang () {
     msg "build: cmake, full config, clang" # ~ 50s
     scripts/config.pl full
-    scripts/config.pl unset MBEDTLS_MEMORY_BACKTRACE # too slow for tests
     CC=clang cmake -D CMAKE_BUILD_TYPE:String=Check -D ENABLE_TESTING=On .
     make
 
@@ -743,12 +828,11 @@ component_test_no_platform () {
     scripts/config.pl unset MBEDTLS_PLATFORM_TIME_ALT
     scripts/config.pl unset MBEDTLS_PLATFORM_EXIT_ALT
     scripts/config.pl unset MBEDTLS_ENTROPY_NV_SEED
-    scripts/config.pl unset MBEDTLS_MEMORY_BUFFER_ALLOC_C
     scripts/config.pl unset MBEDTLS_FS_IO
     # Note, _DEFAULT_SOURCE needs to be defined for platforms using glibc version >2.19,
     # to re-enable platform integration features otherwise disabled in C99 builds
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra -std=c99 -pedantic -O0 -D_DEFAULT_SOURCE' lib programs
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra -O0' test
+    make CC=gcc CFLAGS='-Werror -Wall -Wextra -std=c99 -pedantic -Os -D_DEFAULT_SOURCE' lib programs
+    make CC=gcc CFLAGS='-Werror -Wall -Wextra -Os' test
 }
 
 component_build_no_std_function () {
@@ -757,21 +841,21 @@ component_build_no_std_function () {
     scripts/config.pl full
     scripts/config.pl set MBEDTLS_PLATFORM_NO_STD_FUNCTIONS
     scripts/config.pl unset MBEDTLS_ENTROPY_NV_SEED
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra -O0'
+    make CC=gcc CFLAGS='-Werror -Wall -Wextra -Os'
 }
 
 component_build_no_ssl_srv () {
     msg "build: full config except ssl_srv.c, make, gcc" # ~ 30s
     scripts/config.pl full
     scripts/config.pl unset MBEDTLS_SSL_SRV_C
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra -O0'
+    make CC=gcc CFLAGS='-Werror -Wall -Wextra -O1'
 }
 
 component_build_no_ssl_cli () {
     msg "build: full config except ssl_cli.c, make, gcc" # ~ 30s
     scripts/config.pl full
     scripts/config.pl unset MBEDTLS_SSL_CLI_C
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra -O0'
+    make CC=gcc CFLAGS='-Werror -Wall -Wextra -O1'
 }
 
 component_build_no_sockets () {
@@ -781,7 +865,35 @@ component_build_no_sockets () {
     scripts/config.pl full
     scripts/config.pl unset MBEDTLS_NET_C # getaddrinfo() undeclared, etc.
     scripts/config.pl set MBEDTLS_NO_PLATFORM_ENTROPY # uses syscall() on GNU/Linux
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra -O0 -std=c99 -pedantic' lib
+    make CC=gcc CFLAGS='-Werror -Wall -Wextra -O1 -std=c99 -pedantic' lib
+}
+
+component_test_memory_buffer_allocator_backtrace () {
+    msg "build: default config with memory buffer allocator and backtrace enabled"
+    scripts/config.pl set MBEDTLS_MEMORY_BUFFER_ALLOC_C
+    scripts/config.pl set MBEDTLS_PLATFORM_MEMORY
+    scripts/config.pl set MBEDTLS_MEMORY_BACKTRACE
+    scripts/config.pl set MBEDTLS_MEMORY_DEBUG
+    CC=gcc cmake .
+    make
+
+    msg "test: MBEDTLS_MEMORY_BUFFER_ALLOC_C and MBEDTLS_MEMORY_BACKTRACE"
+    make test
+}
+
+component_test_memory_buffer_allocator () {
+    msg "build: default config with memory buffer allocator"
+    scripts/config.pl set MBEDTLS_MEMORY_BUFFER_ALLOC_C
+    scripts/config.pl set MBEDTLS_PLATFORM_MEMORY
+    CC=gcc cmake .
+    make
+
+    msg "test: MBEDTLS_MEMORY_BUFFER_ALLOC_C"
+    make test
+
+    msg "test: ssl-opt.sh, MBEDTLS_MEMORY_BUFFER_ALLOC_C"
+    # MBEDTLS_MEMORY_BUFFER_ALLOC is slow. Skip tests that tend to time out.
+    if_build_succeeded tests/ssl-opt.sh -e '^DTLS proxy'
 }
 
 component_test_no_max_fragment_length () {
@@ -821,16 +933,75 @@ component_test_platform_calloc_macro () {
     make test
 }
 
+component_test_malloc_0_null () {
+    msg "build: malloc(0) returns NULL (ASan+UBSan build)"
+    scripts/config.pl full
+    scripts/config.pl unset MBEDTLS_MEMORY_BUFFER_ALLOC_C
+    make CC=gcc CFLAGS="'-DMBEDTLS_CONFIG_FILE=\"$PWD/tests/configs/config-wrapper-malloc-0-null.h\"' -O -Werror -Wall -Wextra -fsanitize=address,undefined" LDFLAGS='-fsanitize=address,undefined'
+
+    msg "test: malloc(0) returns NULL (ASan+UBSan build)"
+    make test
+
+    msg "selftest: malloc(0) returns NULL (ASan+UBSan build)"
+    # Just the calloc selftest. "make test" ran the others as part of the
+    # test suites.
+    if_build_succeeded programs/test/selftest calloc
+}
+
 component_test_make_shared () {
     msg "build/test: make shared" # ~ 40s
     make SHARED=1 all check
+    ldd programs/util/strerror | grep libmbedcrypto
+}
+
+component_test_cmake_shared () {
+    msg "build/test: cmake shared" # ~ 2min
+    cmake -DUSE_SHARED_MBEDTLS_LIBRARY=On .
+    make
+    ldd programs/util/strerror | grep libmbedcrypto
+    make test
+}
+
+test_build_opt () {
+    info=$1 cc=$2; shift 2
+    for opt in "$@"; do
+          msg "build/test: $cc $opt, $info" # ~ 30s
+          make CC="$cc" CFLAGS="$opt -Wall -Wextra -Werror"
+          # We're confident enough in compilers to not run _all_ the tests,
+          # but at least run the unit tests. In particular, runs with
+          # optimizations use inline assembly whereas runs with -O0
+          # skip inline assembly.
+          make test # ~30s
+          make clean
+    done
+}
+
+component_test_clang_opt () {
+    scripts/config.pl full
+    test_build_opt 'full config' clang -O0 -Os -O2
+}
+
+component_test_gcc_opt () {
+    scripts/config.pl full
+    test_build_opt 'full config' gcc -O0 -Os -O2
+}
+
+component_build_mbedtls_config_file () {
+    msg "build: make with MBEDTLS_CONFIG_FILE" # ~40s
+    # Use the full config so as to catch a maximum of places where
+    # the check of MBEDTLS_CONFIG_FILE might be missing.
+    scripts/config.pl full
+    sed 's!"check_config.h"!"mbedtls/check_config.h"!' <"$CONFIG_H" >full_config.h
+    echo '#error "MBEDTLS_CONFIG_FILE is not working"' >"$CONFIG_H"
+    make CFLAGS="-I '$PWD' -DMBEDTLS_CONFIG_FILE='\"full_config.h\"'"
+    rm -f full_config.h
 }
 
 component_test_m32_o0 () {
     # Build once with -O0, to compile out the i386 specific inline assembly
     msg "build: i386, make, gcc -O0 (ASan build)" # ~ 30s
     scripts/config.pl full
-    make CC=gcc CFLAGS='-O0 -Werror -Wall -Wextra -m32 -fsanitize=address'
+    make CC=gcc CFLAGS="$ASAN_CFLAGS -m32 -O0" LDFLAGS="-m32 $ASAN_CFLAGS"
 
     msg "test: i386, make, gcc -O0 (ASan build)"
     make test
@@ -846,10 +1017,13 @@ component_test_m32_o1 () {
     # Build again with -O1, to compile in the i386 specific inline assembly
     msg "build: i386, make, gcc -O1 (ASan build)" # ~ 30s
     scripts/config.pl full
-    make CC=gcc CFLAGS='-O1 -Werror -Wall -Wextra -m32 -fsanitize=address'
+    make CC=gcc CFLAGS="$ASAN_CFLAGS -m32 -O1" LDFLAGS="-m32 $ASAN_CFLAGS"
 
     msg "test: i386, make, gcc -O1 (ASan build)"
     make test
+
+    msg "test ssl-opt.sh, i386, make, gcc-O1"
+    if_build_succeeded tests/ssl-opt.sh
 }
 support_test_m32_o1 () {
     support_test_m32_o0 "$@"
@@ -858,7 +1032,7 @@ support_test_m32_o1 () {
 component_test_mx32 () {
     msg "build: 64-bit ILP32, make, gcc" # ~ 30s
     scripts/config.pl full
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra -mx32'
+    make CC=gcc CFLAGS='-Werror -Wall -Wextra -mx32' LDFLAGS='-mx32'
 
     msg "test: 64-bit ILP32, make, gcc"
     make test
@@ -868,6 +1042,16 @@ support_test_mx32 () {
         amd64|x86_64) true;;
         *) false;;
     esac
+}
+
+component_test_min_mpi_window_size () {
+    msg "build: Default + MBEDTLS_MPI_WINDOW_SIZE=1 (ASan build)" # ~ 10s
+    scripts/config.pl set MBEDTLS_MPI_WINDOW_SIZE 1
+    CC=gcc cmake -D CMAKE_BUILD_TYPE:String=Asan .
+    make
+
+    msg "test: MBEDTLS_MPI_WINDOW_SIZE=1 - main suites (inc. selftests) (ASan build)" # ~ 10s
+    make test
 }
 
 component_test_have_int32 () {
@@ -894,35 +1078,13 @@ component_test_have_int64 () {
 
 component_build_arm_none_eabi_gcc () {
     msg "build: arm-none-eabi-gcc, make" # ~ 10s
-    scripts/config.pl full
-    scripts/config.pl unset MBEDTLS_NET_C
-    scripts/config.pl unset MBEDTLS_TIMING_C
-    scripts/config.pl unset MBEDTLS_FS_IO
-    scripts/config.pl unset MBEDTLS_ENTROPY_NV_SEED
-    scripts/config.pl set MBEDTLS_NO_PLATFORM_ENTROPY
-    # following things are not in the default config
-    scripts/config.pl unset MBEDTLS_HAVEGE_C # depends on timing.c
-    scripts/config.pl unset MBEDTLS_THREADING_PTHREAD
-    scripts/config.pl unset MBEDTLS_THREADING_C
-    scripts/config.pl unset MBEDTLS_MEMORY_BACKTRACE # execinfo.h
-    scripts/config.pl unset MBEDTLS_MEMORY_BUFFER_ALLOC_C # calls exit
+    scripts/config.pl baremetal
     make CC=arm-none-eabi-gcc AR=arm-none-eabi-ar LD=arm-none-eabi-ld CFLAGS='-Werror -Wall -Wextra' lib
 }
 
 component_build_arm_none_eabi_gcc_no_udbl_division () {
     msg "build: arm-none-eabi-gcc -DMBEDTLS_NO_UDBL_DIVISION, make" # ~ 10s
-    scripts/config.pl full
-    scripts/config.pl unset MBEDTLS_NET_C
-    scripts/config.pl unset MBEDTLS_TIMING_C
-    scripts/config.pl unset MBEDTLS_FS_IO
-    scripts/config.pl unset MBEDTLS_ENTROPY_NV_SEED
-    scripts/config.pl set MBEDTLS_NO_PLATFORM_ENTROPY
-    # following things are not in the default config
-    scripts/config.pl unset MBEDTLS_HAVEGE_C # depends on timing.c
-    scripts/config.pl unset MBEDTLS_THREADING_PTHREAD
-    scripts/config.pl unset MBEDTLS_THREADING_C
-    scripts/config.pl unset MBEDTLS_MEMORY_BACKTRACE # execinfo.h
-    scripts/config.pl unset MBEDTLS_MEMORY_BUFFER_ALLOC_C # calls exit
+    scripts/config.pl baremetal
     scripts/config.pl set MBEDTLS_NO_UDBL_DIVISION
     make CC=arm-none-eabi-gcc AR=arm-none-eabi-ar LD=arm-none-eabi-ld CFLAGS='-Werror -Wall -Wextra' lib
     echo "Checking that software 64-bit division is not required"
@@ -931,22 +1093,7 @@ component_build_arm_none_eabi_gcc_no_udbl_division () {
 
 component_build_armcc () {
     msg "build: ARM Compiler 5, make"
-    scripts/config.pl full
-    scripts/config.pl unset MBEDTLS_NET_C
-    scripts/config.pl unset MBEDTLS_TIMING_C
-    scripts/config.pl unset MBEDTLS_FS_IO
-    scripts/config.pl unset MBEDTLS_ENTROPY_NV_SEED
-    scripts/config.pl unset MBEDTLS_HAVE_TIME
-    scripts/config.pl unset MBEDTLS_HAVE_TIME_DATE
-    scripts/config.pl set MBEDTLS_NO_PLATFORM_ENTROPY
-    # following things are not in the default config
-    scripts/config.pl unset MBEDTLS_DEPRECATED_WARNING
-    scripts/config.pl unset MBEDTLS_HAVEGE_C # depends on timing.c
-    scripts/config.pl unset MBEDTLS_THREADING_PTHREAD
-    scripts/config.pl unset MBEDTLS_THREADING_C
-    scripts/config.pl unset MBEDTLS_MEMORY_BACKTRACE # execinfo.h
-    scripts/config.pl unset MBEDTLS_MEMORY_BUFFER_ALLOC_C # calls exit
-    scripts/config.pl unset MBEDTLS_PLATFORM_TIME_ALT # depends on MBEDTLS_HAVE_TIME
+    scripts/config.pl baremetal
 
     make CC="$ARMC5_CC" AR="$ARMC5_AR" WARNING_CFLAGS='--strict --c99' lib
     make clean
@@ -965,6 +1112,12 @@ component_build_armcc () {
 
     # ARM Compiler 6 - Target ARMv8-A - AArch64
     armc6_build_test "--target=aarch64-arm-none-eabi -march=armv8.2-a"
+}
+
+component_build_ssl_hw_record_accel() {
+    msg "build: default config with MBEDTLS_SSL_HW_RECORD_ACCEL enabled"
+    scripts/config.pl set MBEDTLS_SSL_HW_RECORD_ACCEL
+    make CFLAGS='-Werror -O1'
 }
 
 component_test_allow_sha1 () {
@@ -1018,10 +1171,8 @@ component_test_valgrind () {
     msg "test: main suites valgrind (Release)"
     make memcheck
 
-    # Optional part(s)
-    # Currently broken, programs don't seem to receive signals
-    # under valgrind on OS X
-
+    # Optional parts (slow; currently broken on OS X because programs don't
+    # seem to receive signals under valgrind on OS X).
     if [ "$MEMORY" -gt 0 ]; then
         msg "test: ssl-opt.sh --memcheck (Release)"
         if_build_succeeded tests/ssl-opt.sh --memcheck

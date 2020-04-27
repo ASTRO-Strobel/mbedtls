@@ -274,7 +274,7 @@ static int net_would_block( const mbedtls_net_context *ctx )
     int err = errno;
 
     /*
-     * Never return 'WOULD BLOCK' on a non-blocking socket
+     * Never return 'WOULD BLOCK' on a blocking socket
      */
 #if defined (__ECOS)
 	int flag;
