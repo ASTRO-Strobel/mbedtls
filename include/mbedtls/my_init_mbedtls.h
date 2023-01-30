@@ -37,8 +37,6 @@
 // but config.h cannot hurt anyway, can it?
 #include "mbedtls/config.h"
 
-__externC cyg_mutex_t mutex_mpi_mul;
 
-void my_mbedtls_init(void);
 
 #endif

@@ -108,6 +108,11 @@ static void mbedtls_zeroize( void *v, size_t n ) {
 #define BITS_TO_LIMBS(i)  ( (i) / biL + ( (i) % biL != 0 ) )
 #define CHARS_TO_LIMBS(i) ( (i) / ciL + ( (i) % ciL != 0 ) )
 
+// mutex for the 64-bit multiplier, which is located in the FPGA
+#include <mbedtls/threading.h>
+mbedtls_threading_mutex_t mutex_mpi_mul;
+bool mutex_mpi_mul_initialized = false;
+
 /*
  * Initialize one MPI
  */
@@ -115,6 +120,12 @@ void mbedtls_mpi_init( mbedtls_mpi *X )
 {
     if( X == NULL )
         return;
+
+    // initialize the global mutex for the 64 bit multiplier once
+    if (!mutex_mpi_mul_initialized) {
+    	mbedtls_mutex_init(&mutex_mpi_mul);
+    	mutex_mpi_mul_initialized = true;
+    }
 
     X->s = 1;
     X->n = 0;
@@ -1414,10 +1425,10 @@ int mbedtls_mpi_mul_mpi( mbedtls_mpi *X, const mbedtls_mpi *A, const mbedtls_mpi
     MBEDTLS_MPI_CHK( mbedtls_mpi_grow( X, i + j ) );
     MBEDTLS_MPI_CHK( mbedtls_mpi_lset( X, 0 ) );
 
-    cyg_mutex_lock(&mutex_mpi_mul);
+    mbedtls_mutex_lock(&mutex_mpi_mul);
     for( i++; j > 0; j-- )
         mpi_mul_hlp( i - 1, A->p, X->p + j - 1, B->p[j - 1] );
-    cyg_mutex_unlock(&mutex_mpi_mul);
+    mbedtls_mutex_unlock(&mutex_mpi_mul);
 
     X->s = A->s * B->s;
 
@@ -1802,7 +1813,7 @@ static void mpi_montmul( mbedtls_mpi *A, const mbedtls_mpi *B, const mbedtls_mpi
     n = N->n;
     m = ( B->n < n ) ? B->n : n;
 
-    cyg_mutex_lock(&mutex_mpi_mul);
+    mbedtls_mutex_lock(&mutex_mpi_mul);
     for( i = 0; i < n; i++ )
     {
         /*
@@ -1816,7 +1827,7 @@ static void mpi_montmul( mbedtls_mpi *A, const mbedtls_mpi *B, const mbedtls_mpi
 
         *d++ = u0; d[n + 1] = 0;
     }
-    cyg_mutex_unlock(&mutex_mpi_mul);
+    mbedtls_mutex_unlock(&mutex_mpi_mul);
 
     /* At this point, d is either the desired result or the desired result
      * plus N. We now potentially subtract N, avoiding leaking whether the
