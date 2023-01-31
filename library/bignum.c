@@ -2002,7 +2002,8 @@ static int mpi_select( mbedtls_mpi *R, const mbedtls_mpi *T, size_t T_size, size
 {
     int ret = MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED;
 
-    for( size_t i = 0; i < T_size; i++ )
+    size_t i;
+    for( i = 0; i < T_size; i++ )
     {
         MBEDTLS_MPI_CHK( mbedtls_mpi_safe_cond_assign( R, &T[i],
                         (unsigned char) mbedtls_ct_size_bool_eq( i, idx ) ) );
