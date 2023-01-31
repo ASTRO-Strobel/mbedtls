@@ -76,6 +76,8 @@ int main( void )
     mbedtls_exit( 0 );
 }
 #else
+
+
 int main( int argc, char *argv[] )
 {
     FILE *f;

@@ -89,7 +89,6 @@
     "    password_file=%%s    default: \"\"\n"          \
     "\n"
 
-
 #if !defined(MBEDTLS_BIGNUM_C) ||                                  \
     !defined(MBEDTLS_PK_PARSE_C) || !defined(MBEDTLS_FS_IO)
 int main( void )
@@ -99,6 +98,8 @@ int main( void )
     mbedtls_exit( 0 );
 }
 #else
+
+
 /*
  * global options
  */

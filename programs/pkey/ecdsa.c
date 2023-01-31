@@ -125,6 +125,7 @@ static void dump_pubkey( const char *title, mbedtls_ecdsa_context *key )
 #define dump_pubkey( a, b )
 #endif
 
+
 int main( int argc, char *argv[] )
 {
     int ret = 1;

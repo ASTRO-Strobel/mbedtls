@@ -89,6 +89,8 @@ int main( void )
     mbedtls_exit( 0 );
 }
 #else
+
+
 /*
  * global options
  */
