@@ -75,7 +75,7 @@ extern "C" {
 /**
  * \brief   Information for session ticket protection
  */
-typedef struct
+typedef struct mbedtls_ssl_ticket_key
 {
     unsigned char name[4];          /*!< random key identifier              */
     uint32_t generation_time;       /*!< key generation timestamp (seconds) */
@@ -86,7 +86,7 @@ mbedtls_ssl_ticket_key;
 /**
  * \brief   Context for session ticket handling functions
  */
-typedef struct
+typedef struct mbedtls_ssl_ticket_context
 {
     mbedtls_ssl_ticket_key keys[2]; /*!< ticket protection keys             */
     unsigned char active;           /*!< index of the currently active key  */
@@ -124,7 +124,7 @@ void mbedtls_ssl_ticket_init( mbedtls_ssl_ticket_context *ctx );
  *                  Recommended value: 86400 (one day).
  *
  * \note            It is highly recommended to select a cipher that is at
- *                  least as strong as the the strongest ciphersuite
+ *                  least as strong as the strongest ciphersuite
  *                  supported. Usually that means a 256-bit key.
  *
  * \note            The lifetime of the keys is twice the lifetime of tickets.

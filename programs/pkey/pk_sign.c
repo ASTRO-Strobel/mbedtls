@@ -85,6 +85,7 @@ int main( void )
 #include <stdio.h>
 #include <string.h>
 
+
 /*
  * For the currently used signature algorithms the buffer to store any signature
  * must be at least of size MAX(MBEDTLS_ECDSA_MAX_LEN, MBEDTLS_MPI_MAX_SIZE)

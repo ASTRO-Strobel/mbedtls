@@ -63,6 +63,11 @@ set -u
 # where it may output seemingly unlimited length error logs.
 ulimit -f 20971520
 
+if cd $( dirname $0 ); then :; else
+    echo "cd $( dirname $0 ) failed" >&2
+    exit 1
+fi
+
 # default values, can be overridden by the environment
 : ${P_SRV:=../programs/ssl/ssl_server2}
 : ${P_CLI:=../programs/ssl/ssl_client2}
@@ -75,8 +80,38 @@ ulimit -f 20971520
 O_SRV="$OPENSSL_CMD s_server -www -cert data_files/server5.crt -key data_files/server5.key"
 O_CLI="echo 'GET / HTTP/1.0' | $OPENSSL_CMD s_client"
 G_SRV="$GNUTLS_SERV --x509certfile data_files/server5.crt --x509keyfile data_files/server5.key"
-G_CLI="echo 'GET / HTTP/1.0' | $GNUTLS_CLI --x509cafile data_files/test-ca_cat12u.crt"
+G_CLI="echo 'GET / HTTP/1.0' | $GNUTLS_CLI --x509cafile data_files/test-ca_cat12.crt"
 TCP_CLIENT="$PERL scripts/tcp_client.pl"
+
+# alternative versions of OpenSSL and GnuTLS (no default path)
+
+if [ -n "${OPENSSL_LEGACY:-}" ]; then
+    O_LEGACY_SRV="$OPENSSL_LEGACY s_server -www -cert data_files/server5.crt -key data_files/server5.key"
+    O_LEGACY_CLI="echo 'GET / HTTP/1.0' | $OPENSSL_LEGACY s_client"
+else
+    O_LEGACY_SRV=false
+    O_LEGACY_CLI=false
+fi
+
+if [ -n "${OPENSSL_NEXT:-}" ]; then
+    O_NEXT_SRV="$OPENSSL_NEXT s_server -www -cert data_files/server5.crt -key data_files/server5.key"
+    O_NEXT_CLI="echo 'GET / HTTP/1.0' | $OPENSSL_NEXT s_client"
+else
+    O_NEXT_SRV=false
+    O_NEXT_CLI=false
+fi
+
+if [ -n "${GNUTLS_NEXT_SERV:-}" ]; then
+    G_NEXT_SRV="$GNUTLS_NEXT_SERV --x509certfile data_files/server5.crt --x509keyfile data_files/server5.key"
+else
+    G_NEXT_SRV=false
+fi
+
+if [ -n "${GNUTLS_NEXT_CLI:-}" ]; then
+    G_NEXT_CLI="echo 'GET / HTTP/1.0' | $GNUTLS_NEXT_CLI --x509cafile data_files/test-ca_cat12.crt"
+else
+    G_NEXT_CLI=false
+fi
 
 TESTS=0
 FAILS=0
@@ -103,8 +138,8 @@ print_usage() {
     echo "Usage: $0 [options]"
     printf "  -h|--help\tPrint this help.\n"
     printf "  -m|--memcheck\tCheck memory leaks and errors.\n"
-    printf "  -f|--filter\tOnly matching tests are executed (BRE)\n"
-    printf "  -e|--exclude\tMatching tests are excluded (BRE)\n"
+    printf "  -f|--filter\tOnly matching tests are executed (substring or BRE)\n"
+    printf "  -e|--exclude\tMatching tests are excluded (substring or BRE)\n"
     printf "  -n|--number\tExecute only numbered test (comma-separated, e.g. '245,256')\n"
     printf "  -s|--show-numbers\tShow test numbers in front of test names\n"
     printf "  -p|--preserve-logs\tPreserve logs of successful tests as well\n"
@@ -157,17 +192,78 @@ get_options() {
     done
 }
 
+# Read boolean configuration options from config.h for easy and quick
+# testing. Skip non-boolean options (with something other than spaces
+# and a comment after "#define SYMBOL"). The variable contains a
+# space-separated list of symbols.
+CONFIGS_ENABLED=" $(<"$CONFIG_H" \
+                    sed -n 's!^ *#define  *\([A-Za-z][0-9A-Z_a-z]*\) *\(/*\)*!\1!p' |
+                    tr '\n' ' ')"
+
+# Skip next test; use this macro to skip tests which are legitimate
+# in theory and expected to be re-introduced at some point, but
+# aren't expected to succeed at the moment due to problems outside
+# our control (such as bugs in other TLS implementations).
+skip_next_test() {
+    SKIP_NEXT="YES"
+}
+
 # skip next test if the flag is not enabled in config.h
 requires_config_enabled() {
-    if grep "^#define $1" $CONFIG_H > /dev/null; then :; else
-        SKIP_NEXT="YES"
-    fi
+    case $CONFIGS_ENABLED in
+        *" $1 "*) :;;
+        *) SKIP_NEXT="YES";;
+    esac
 }
 
 # skip next test if the flag is enabled in config.h
 requires_config_disabled() {
-    if grep "^#define $1" $CONFIG_H > /dev/null; then
-        SKIP_NEXT="YES"
+    case $CONFIGS_ENABLED in
+        *" $1 "*) SKIP_NEXT="YES";;
+    esac
+}
+
+get_config_value_or_default() {
+    # This function uses the query_config command line option to query the
+    # required Mbed TLS compile time configuration from the ssl_server2
+    # program. The command will always return a success value if the
+    # configuration is defined and the value will be printed to stdout.
+    #
+    # Note that if the configuration is not defined or is defined to nothing,
+    # the output of this function will be an empty string.
+    ${P_SRV} "query_config=${1}"
+}
+
+requires_config_value_at_least() {
+    VAL="$( get_config_value_or_default "$1" )"
+    if [ -z "$VAL" ]; then
+        # Should never happen
+        echo "Mbed TLS configuration $1 is not defined"
+        exit 1
+    elif [ "$VAL" -lt "$2" ]; then
+       SKIP_NEXT="YES"
+    fi
+}
+
+requires_config_value_at_most() {
+    VAL=$( get_config_value_or_default "$1" )
+    if [ -z "$VAL" ]; then
+        # Should never happen
+        echo "Mbed TLS configuration $1 is not defined"
+        exit 1
+    elif [ "$VAL" -gt "$2" ]; then
+       SKIP_NEXT="YES"
+    fi
+}
+
+requires_config_value_equals() {
+    VAL=$( get_config_value_or_default "$1" )
+    if [ -z "$VAL" ]; then
+        # Should never happen
+        echo "Mbed TLS configuration $1 is not defined"
+        exit 1
+    elif [ "$VAL" -ne "$2" ]; then
+       SKIP_NEXT="YES"
     fi
 }
 
@@ -186,6 +282,12 @@ requires_openssl_with_fallback_scsv() {
     fi
 }
 
+# skip next test if either IN_CONTENT_LEN or MAX_CONTENT_LEN are below a value
+requires_max_content_len() {
+    requires_config_value_at_least "MBEDTLS_SSL_IN_CONTENT_LEN" $1
+    requires_config_value_at_least "MBEDTLS_SSL_OUT_CONTENT_LEN" $1
+}
+
 # skip next test if GnuTLS isn't available
 requires_gnutls() {
     if [ -z "${GNUTLS_AVAILABLE:-}" ]; then
@@ -196,6 +298,47 @@ requires_gnutls() {
         fi
     fi
     if [ "$GNUTLS_AVAILABLE" = "NO" ]; then
+        SKIP_NEXT="YES"
+    fi
+}
+
+# skip next test if GnuTLS-next isn't available
+requires_gnutls_next() {
+    if [ -z "${GNUTLS_NEXT_AVAILABLE:-}" ]; then
+        if ( which "${GNUTLS_NEXT_CLI:-}" && which "${GNUTLS_NEXT_SERV:-}" ) >/dev/null 2>&1; then
+            GNUTLS_NEXT_AVAILABLE="YES"
+        else
+            GNUTLS_NEXT_AVAILABLE="NO"
+        fi
+    fi
+    if [ "$GNUTLS_NEXT_AVAILABLE" = "NO" ]; then
+        SKIP_NEXT="YES"
+    fi
+}
+
+# skip next test if OpenSSL-legacy isn't available
+requires_openssl_legacy() {
+    if [ -z "${OPENSSL_LEGACY_AVAILABLE:-}" ]; then
+        if which "${OPENSSL_LEGACY:-}" >/dev/null 2>&1; then
+            OPENSSL_LEGACY_AVAILABLE="YES"
+        else
+            OPENSSL_LEGACY_AVAILABLE="NO"
+        fi
+    fi
+    if [ "$OPENSSL_LEGACY_AVAILABLE" = "NO" ]; then
+        SKIP_NEXT="YES"
+    fi
+}
+
+requires_openssl_next() {
+    if [ -z "${OPENSSL_NEXT_AVAILABLE:-}" ]; then
+        if which "${OPENSSL_NEXT:-}" >/dev/null 2>&1; then
+            OPENSSL_NEXT_AVAILABLE="YES"
+        else
+            OPENSSL_NEXT_AVAILABLE="NO"
+        fi
+    fi
+    if [ "$OPENSSL_NEXT_AVAILABLE" = "NO" ]; then
         SKIP_NEXT="YES"
     fi
 }
@@ -216,6 +359,41 @@ requires_ipv6() {
     fi
 
     if [ "$HAS_IPV6" = "NO" ]; then
+        SKIP_NEXT="YES"
+    fi
+}
+
+# skip next test if it's i686 or uname is not available
+requires_not_i686() {
+    if [ -z "${IS_I686:-}" ]; then
+        IS_I686="YES"
+        if which "uname" >/dev/null 2>&1; then
+            if [ -z "$(uname -a | grep i686)" ]; then
+                IS_I686="NO"
+            fi
+        fi
+    fi
+    if [ "$IS_I686" = "YES" ]; then
+        SKIP_NEXT="YES"
+    fi
+}
+
+# Calculate the input & output maximum content lengths set in the config
+MAX_CONTENT_LEN=$( get_config_value_or_default "MBEDTLS_SSL_MAX_CONTENT_LEN" )
+MAX_IN_LEN=$( get_config_value_or_default "MBEDTLS_SSL_IN_CONTENT_LEN" )
+MAX_OUT_LEN=$( get_config_value_or_default "MBEDTLS_SSL_OUT_CONTENT_LEN" )
+
+# Calculate the maximum content length that fits both
+if [ "$MAX_IN_LEN" -lt "$MAX_CONTENT_LEN" ]; then
+    MAX_CONTENT_LEN="$MAX_IN_LEN"
+fi
+if [ "$MAX_OUT_LEN" -lt "$MAX_CONTENT_LEN" ]; then
+    MAX_CONTENT_LEN="$MAX_OUT_LEN"
+fi
+
+# skip the next test if the SSL output buffer is less than 16KB
+requires_full_size_output_buffer() {
+    if [ "$MAX_OUT_LEN" -ne 16384 ]; then
         SKIP_NEXT="YES"
     fi
 }
@@ -261,9 +439,40 @@ print_name() {
 
 }
 
+# Trivial function for compatibility with later Mbed TLS versions
+record_outcome() {
+    echo "$1"
+}
+
+# True if the presence of the given pattern in a log definitely indicates
+# that the test has failed. False if the presence is inconclusive.
+#
+# Inputs:
+# * $1: pattern found in the logs
+# * $TIMES_LEFT: >0 if retrying is an option
+#
+# Outputs:
+# * $outcome: set to a retry reason if the pattern is inconclusive,
+#             unchanged otherwise.
+# * Return value: 1 if the pattern is inconclusive,
+#                 0 if the failure is definitive.
+log_pattern_presence_is_conclusive() {
+    # If we've run out of attempts, then don't retry no matter what.
+    if [ $TIMES_LEFT -eq 0 ]; then
+        return 0
+    fi
+    case $1 in
+        "resend")
+            # An undesired resend may have been caused by the OS dropping or
+            # delaying a packet at an inopportune time.
+            outcome="RETRY(resend)"
+            return 1;;
+    esac
+}
+
 # fail <message>
 fail() {
-    echo "FAIL"
+    record_outcome "FAIL" "$1"
     echo "  ! $1"
 
     mv $SRV_OUT o-srv-${TESTS}.log
@@ -292,17 +501,21 @@ fail() {
 
 # is_polar <cmd_line>
 is_polar() {
-    echo "$1" | grep 'ssl_server2\|ssl_client2' > /dev/null
+    case "$1" in
+        *ssl_client2*) true;;
+        *ssl_server2*) true;;
+        *) false;;
+    esac
 }
 
 # openssl s_server doesn't have -www with DTLS
 check_osrv_dtls() {
-    if echo "$SRV_CMD" | grep 's_server.*-dtls' >/dev/null; then
-        NEEDS_INPUT=1
-        SRV_CMD="$( echo $SRV_CMD | sed s/-www// )"
-    else
-        NEEDS_INPUT=0
-    fi
+    case "$SRV_CMD" in
+        *s_server*-dtls*)
+            NEEDS_INPUT=1
+            SRV_CMD="$( echo $SRV_CMD | sed s/-www// )";;
+        *) NEEDS_INPUT=0;;
+    esac
 }
 
 # provide input to commands that need it
@@ -331,6 +544,8 @@ has_mem_err() {
 # Wait for process $2 named $3 to be listening on port $1. Print error to $4.
 if type lsof >/dev/null 2>/dev/null; then
     wait_app_start() {
+        newline='
+'
         START_TIME=$(date +%s)
         if [ "$DTLS" -eq 1 ]; then
             proto=UDP
@@ -338,7 +553,15 @@ if type lsof >/dev/null 2>/dev/null; then
             proto=TCP
         fi
         # Make a tight loop, server normally takes less than 1s to start.
-        while ! lsof -a -n -b -i "$proto:$1" -p "$2" >/dev/null 2>/dev/null; do
+        while true; do
+              SERVER_PIDS=$(lsof -a -n -b -i "$proto:$1" -F p)
+              # When we use a proxy, it will be listening on the same port we
+              # are checking for as well as the server and lsof will list both.
+              # If multiple PIDs are returned, each one will be on a separate
+              # line, each prepended with 'p'.
+             case ${newline}${SERVER_PIDS}${newline} in
+                  *${newline}p${2}${newline}*) break;;
+              esac
               if [ $(( $(date +%s) - $START_TIME )) -gt $DOG_DELAY ]; then
                   echo "$3 START TIMEOUT"
                   echo "$3 START TIMEOUT" >> $4
@@ -418,63 +641,18 @@ wait_client_done() {
 
 # check if the given command uses dtls and sets global variable DTLS
 detect_dtls() {
-    if echo "$1" | grep 'dtls=1\|-dtls1\|-u' >/dev/null; then
-        DTLS=1
-    else
-        DTLS=0
-    fi
+    case "$1" in
+        *dtls=1*|*-dtls*|*-u*) DTLS=1;;
+        *) DTLS=0;;
+    esac
 }
 
-# Usage: run_test name [-p proxy_cmd] srv_cmd cli_cmd cli_exit [option [...]]
-# Options:  -s pattern  pattern that must be present in server output
-#           -c pattern  pattern that must be present in client output
-#           -u pattern  lines after pattern must be unique in client output
-#           -f call shell function on client output
-#           -S pattern  pattern that must be absent in server output
-#           -C pattern  pattern that must be absent in client output
-#           -U pattern  lines after pattern must be unique in server output
-#           -F call shell function on server output
-run_test() {
-    NAME="$1"
-    shift 1
-
-    if echo "$NAME" | grep "$FILTER" | grep -v "$EXCLUDE" >/dev/null; then :
-    else
-        SKIP_NEXT="NO"
-        return
-    fi
-
-    print_name "$NAME"
-
-    # Do we only run numbered tests?
-    if [ "X$RUN_TEST_NUMBER" = "X" ]; then :
-    elif echo ",$RUN_TEST_NUMBER," | grep ",$TESTS," >/dev/null; then :
-    else
-        SKIP_NEXT="YES"
-    fi
-
-    # should we skip?
-    if [ "X$SKIP_NEXT" = "XYES" ]; then
-        SKIP_NEXT="NO"
-        echo "SKIP"
-        SKIPS=$(( $SKIPS + 1 ))
-        return
-    fi
-
-    # does this test use a proxy?
-    if [ "X$1" = "X-p" ]; then
-        PXY_CMD="$2"
-        shift 2
-    else
-        PXY_CMD=""
-    fi
-
-    # get commands and client output
-    SRV_CMD="$1"
-    CLI_CMD="$2"
-    CLI_EXPECT="$3"
-    shift 3
-
+# Analyze the commands that will be used in a test.
+#
+# Analyze and possibly instrument $PXY_CMD, $CLI_CMD, $SRV_CMD to pass
+# extra arguments or go through wrappers.
+# Set $DTLS (0=TLS, 1=DTLS).
+analyze_test_commands() {
     # update DTLS variable
     detect_dtls "$SRV_CMD"
 
@@ -504,46 +682,29 @@ run_test() {
             CLI_CMD="valgrind --leak-check=full $CLI_CMD"
         fi
     fi
+}
 
-    TIMES_LEFT=2
-    while [ $TIMES_LEFT -gt 0 ]; do
-        TIMES_LEFT=$(( $TIMES_LEFT - 1 ))
+# Check for failure conditions after a test case.
+#
+# Inputs from run_test:
+# * positional parameters: test options (see run_test documentation)
+# * $CLI_EXIT: client return code
+# * $CLI_EXPECT: expected client return code
+# * $SRV_RET: server return code
+# * $CLI_OUT, $SRV_OUT, $PXY_OUT: files containing client/server/proxy logs
+# * $TIMES_LEFT: if nonzero, a RETRY outcome is allowed
+#
+# Outputs:
+# * $outcome: one of PASS/RETRY*/FAIL
+check_test_failure() {
+    outcome=FAIL
 
-        # run the commands
-        if [ -n "$PXY_CMD" ]; then
-            printf "# %s\n%s\n" "$NAME" "$PXY_CMD" > $PXY_OUT
-            $PXY_CMD >> $PXY_OUT 2>&1 &
-            PXY_PID=$!
-            wait_proxy_start "$PXY_PORT" "$PXY_PID"
-        fi
-
-        check_osrv_dtls
-        printf '# %s\n%s\n' "$NAME" "$SRV_CMD" > $SRV_OUT
-        provide_input | $SRV_CMD >> $SRV_OUT 2>&1 &
-        SRV_PID=$!
-        wait_server_start "$SRV_PORT" "$SRV_PID"
-
-        printf '# %s\n%s\n' "$NAME" "$CLI_CMD" > $CLI_OUT
-        eval "$CLI_CMD" >> $CLI_OUT 2>&1 &
-        wait_client_done
-
-        # terminate the server (and the proxy)
-        kill $SRV_PID
-        wait $SRV_PID
-        SRV_RET=$?
-
-        if [ -n "$PXY_CMD" ]; then
-            kill $PXY_PID >/dev/null 2>&1
-            wait $PXY_PID
-        fi
-
-        # retry only on timeouts
-        if grep '===CLIENT_TIMEOUT===' $CLI_OUT >/dev/null; then
-            printf "RETRY "
-        else
-            TIMES_LEFT=0
-        fi
-    done
+    if [ $TIMES_LEFT -gt 0 ] &&
+       grep '===CLIENT_TIMEOUT===' $CLI_OUT >/dev/null
+    then
+        outcome="RETRY(client-timeout)"
+        return
+    fi
 
     # check if the client and server went at least to the handshake stage
     # (useful to avoid tests with only negative assertions and non-zero
@@ -602,14 +763,18 @@ run_test() {
 
             "-S")
                 if grep -v '^==' $SRV_OUT | grep -v 'Serious error when reading debug info' | grep "$2" >/dev/null; then
-                    fail "pattern '$2' MUST NOT be present in the Server output"
+                    if log_pattern_presence_is_conclusive "$2"; then
+                        fail "pattern '$2' MUST NOT be present in the Server output"
+                    fi
                     return
                 fi
                 ;;
 
             "-C")
                 if grep -v '^==' $CLI_OUT | grep -v 'Serious error when reading debug info' | grep "$2" >/dev/null; then
-                    fail "pattern '$2' MUST NOT be present in the Client output"
+                    if log_pattern_presence_is_conclusive "$2"; then
+                        fail "pattern '$2' MUST NOT be present in the Client output"
+                    fi
                     return
                 fi
                 ;;
@@ -667,7 +832,126 @@ run_test() {
     fi
 
     # if we're here, everything is ok
-    echo "PASS"
+    outcome=PASS
+}
+
+# Run the current test case: start the server and if applicable the proxy, run
+# the client, wait for all processes to finish or time out.
+#
+# Inputs:
+# * $NAME: test case name
+# * $CLI_CMD, $SRV_CMD, $PXY_CMD: commands to run
+# * $CLI_OUT, $SRV_OUT, $PXY_OUT: files to contain client/server/proxy logs
+#
+# Outputs:
+# * $CLI_EXIT: client return code
+# * $SRV_RET: server return code
+do_run_test_once() {
+    # run the commands
+    if [ -n "$PXY_CMD" ]; then
+        printf "# %s\n%s\n" "$NAME" "$PXY_CMD" > $PXY_OUT
+        $PXY_CMD >> $PXY_OUT 2>&1 &
+        PXY_PID=$!
+        wait_proxy_start "$PXY_PORT" "$PXY_PID"
+    fi
+
+    check_osrv_dtls
+    printf '# %s\n%s\n' "$NAME" "$SRV_CMD" > $SRV_OUT
+    provide_input | $SRV_CMD >> $SRV_OUT 2>&1 &
+    SRV_PID=$!
+    wait_server_start "$SRV_PORT" "$SRV_PID"
+
+    printf '# %s\n%s\n' "$NAME" "$CLI_CMD" > $CLI_OUT
+    eval "$CLI_CMD" >> $CLI_OUT 2>&1 &
+    wait_client_done
+
+    sleep 0.05
+
+    # terminate the server (and the proxy)
+    kill $SRV_PID
+    wait $SRV_PID
+    SRV_RET=$?
+
+    if [ -n "$PXY_CMD" ]; then
+        kill $PXY_PID >/dev/null 2>&1
+        wait $PXY_PID
+    fi
+}
+
+# Usage: run_test name [-p proxy_cmd] srv_cmd cli_cmd cli_exit [option [...]]
+# Options:  -s pattern  pattern that must be present in server output
+#           -c pattern  pattern that must be present in client output
+#           -u pattern  lines after pattern must be unique in client output
+#           -f call shell function on client output
+#           -S pattern  pattern that must be absent in server output
+#           -C pattern  pattern that must be absent in client output
+#           -U pattern  lines after pattern must be unique in server output
+#           -F call shell function on server output
+run_test() {
+    NAME="$1"
+    shift 1
+
+    if is_excluded "$NAME"; then
+        SKIP_NEXT="NO"
+        return
+    fi
+
+    print_name "$NAME"
+
+    # Do we only run numbered tests?
+    if [ -n "$RUN_TEST_NUMBER" ]; then
+        case ",$RUN_TEST_NUMBER," in
+            *",$TESTS,"*) :;;
+            *) SKIP_NEXT="YES";;
+        esac
+    fi
+
+    # does this test use a proxy?
+    if [ "X$1" = "X-p" ]; then
+        PXY_CMD="$2"
+        shift 2
+    else
+        PXY_CMD=""
+    fi
+
+    # get commands and client output
+    SRV_CMD="$1"
+    CLI_CMD="$2"
+    CLI_EXPECT="$3"
+    shift 3
+
+    # Check if test uses files
+    case "$SRV_CMD $CLI_CMD" in
+        *data_files/*)
+            requires_config_enabled MBEDTLS_FS_IO;;
+    esac
+
+    # should we skip?
+    if [ "X$SKIP_NEXT" = "XYES" ]; then
+        SKIP_NEXT="NO"
+        record_outcome "SKIP"
+        SKIPS=$(( $SKIPS + 1 ))
+        return
+    fi
+
+    analyze_test_commands "$@"
+
+    TIMES_LEFT=2
+    while [ $TIMES_LEFT -gt 0 ]; do
+        TIMES_LEFT=$(( $TIMES_LEFT - 1 ))
+
+        do_run_test_once
+
+        check_test_failure "$@"
+        case $outcome in
+            PASS) break;;
+            RETRY*) printf "$outcome ";;
+            FAIL) return;;
+        esac
+    done
+
+    # If we get this far, the test case passed.
+    record_outcome "PASS"
     if [ "$PRESERVE_LOGS" -gt 0 ]; then
         mv $SRV_OUT o-srv-${TESTS}.log
         mv $CLI_OUT o-cli-${TESTS}.log
@@ -692,24 +976,62 @@ cleanup() {
 # MAIN
 #
 
-if cd $( dirname $0 ); then :; else
-    echo "cd $( dirname $0 ) failed" >&2
-    exit 1
-fi
-
 get_options "$@"
 
+# Optimize filters: if $FILTER and $EXCLUDE can be expressed as shell
+# patterns rather than regular expressions, use a case statement instead
+# of calling grep. To keep the optimizer simple, it is incomplete and only
+# detects simple cases: plain substring, everything, nothing.
+#
+# As an exception, the character '.' is treated as an ordinary character
+# if it is the only special character in the string. This is because it's
+# rare to need "any one character", but needing a literal '.' is common
+# (e.g. '-f "DTLS 1.2"').
+need_grep=
+case "$FILTER" in
+    '^$') simple_filter=;;
+    '.*') simple_filter='*';;
+    *[][$+*?\\^{\|}]*) # Regexp special characters (other than .), we need grep
+        need_grep=1;;
+    *) # No regexp or shell-pattern special character
+        simple_filter="*$FILTER*";;
+esac
+case "$EXCLUDE" in
+    '^$') simple_exclude=;;
+    '.*') simple_exclude='*';;
+    *[][$+*?\\^{\|}]*) # Regexp special characters (other than .), we need grep
+        need_grep=1;;
+    *) # No regexp or shell-pattern special character
+        simple_exclude="*$EXCLUDE*";;
+esac
+if [ -n "$need_grep" ]; then
+    is_excluded () {
+        ! echo "$1" | grep "$FILTER" | grep -q -v "$EXCLUDE"
+    }
+else
+    is_excluded () {
+        case "$1" in
+            $simple_exclude) true;;
+            $simple_filter) false;;
+            *) true;;
+        esac
+    }
+fi
+
 # sanity checks, avoid an avalanche of errors
-if [ ! -x "$P_SRV" ]; then
-    echo "Command '$P_SRV' is not an executable file"
+P_SRV_BIN="${P_SRV%%[  ]*}"
+P_CLI_BIN="${P_CLI%%[  ]*}"
+P_PXY_BIN="${P_PXY%%[  ]*}"
+if [ ! -x "$P_SRV_BIN" ]; then
+    echo "Command '$P_SRV_BIN' is not an executable file"
     exit 1
 fi
-if [ ! -x "$P_CLI" ]; then
-    echo "Command '$P_CLI' is not an executable file"
+if [ ! -x "$P_CLI_BIN" ]; then
+    echo "Command '$P_CLI_BIN' is not an executable file"
     exit 1
 fi
-if [ ! -x "$P_PXY" ]; then
-    echo "Command '$P_PXY' is not an executable file"
+if [ ! -x "$P_PXY_BIN" ]; then
+    echo "Command '$P_PXY_BIN' is not an executable file"
     exit 1
 fi
 if [ "$MEMCHECK" -gt 0 ]; then
@@ -753,13 +1075,33 @@ SRV_DELAY_SECONDS=0
 
 # fix commands to use this port, force IPv4 while at it
 # +SRV_PORT will be replaced by either $SRV_PORT or $PXY_PORT later
+# Note: Using 'localhost' rather than 127.0.0.1 here is unwise, as on many
+# machines that will resolve to ::1, and we don't want ipv6 here.
 P_SRV="$P_SRV server_addr=127.0.0.1 server_port=$SRV_PORT"
 P_CLI="$P_CLI server_addr=127.0.0.1 server_port=+SRV_PORT"
 P_PXY="$P_PXY server_addr=127.0.0.1 server_port=$SRV_PORT listen_addr=127.0.0.1 listen_port=$PXY_PORT ${SEED:+"seed=$SEED"}"
-O_SRV="$O_SRV -accept $SRV_PORT -dhparam data_files/dhparams.pem"
-O_CLI="$O_CLI -connect localhost:+SRV_PORT"
+O_SRV="$O_SRV -accept $SRV_PORT"
+O_CLI="$O_CLI -connect 127.0.0.1:+SRV_PORT"
 G_SRV="$G_SRV -p $SRV_PORT"
-G_CLI="$G_CLI -p +SRV_PORT localhost"
+G_CLI="$G_CLI -p +SRV_PORT"
+
+if [ -n "${OPENSSL_LEGACY:-}" ]; then
+    O_LEGACY_SRV="$O_LEGACY_SRV -accept $SRV_PORT -dhparam data_files/dhparams.pem"
+    O_LEGACY_CLI="$O_LEGACY_CLI -connect 127.0.0.1:+SRV_PORT"
+fi
+
+if [ -n "${OPENSSL_NEXT:-}" ]; then
+    O_NEXT_SRV="$O_NEXT_SRV -accept $SRV_PORT"
+    O_NEXT_CLI="$O_NEXT_CLI -connect 127.0.0.1:+SRV_PORT"
+fi
+
+if [ -n "${GNUTLS_NEXT_SERV:-}" ]; then
+    G_NEXT_SRV="$G_NEXT_SRV -p $SRV_PORT"
+fi
+
+if [ -n "${GNUTLS_NEXT_CLI:-}" ]; then
+    G_NEXT_CLI="$G_NEXT_CLI -p +SRV_PORT"
+fi
 
 # Allow SHA-1, because many of our test certificates use it
 P_SRV="$P_SRV allow_sha1=1"
@@ -786,7 +1128,7 @@ run_test    "Default" \
             "$P_CLI" \
             0 \
             -s "Protocol is TLSv1.2" \
-            -s "Ciphersuite is TLS-ECDHE-ECDSA-WITH-AES-256-GCM-SHA384" \
+            -s "Ciphersuite is TLS-ECDHE-RSA-WITH-CHACHA20-POLY1305-SHA256" \
             -s "client hello v3, signature_algorithm ext: 6" \
             -s "ECDHE curve: secp521r1" \
             -S "error" \
@@ -797,7 +1139,7 @@ run_test    "Default, DTLS" \
             "$P_CLI dtls=1" \
             0 \
             -s "Protocol is DTLSv1.2" \
-            -s "Ciphersuite is TLS-ECDHE-ECDSA-WITH-AES-256-GCM-SHA384"
+            -s "Ciphersuite is TLS-ECDHE-RSA-WITH-CHACHA20-POLY1305-SHA256"
 
 requires_config_enabled MBEDTLS_ZLIB_SUPPORT
 run_test    "Default (compression enabled)" \
@@ -813,16 +1155,10 @@ run_test    "Default (compression enabled)" \
 
 # Test current time in ServerHello
 requires_config_enabled MBEDTLS_HAVE_TIME
-run_test    "Default, ServerHello contains gmt_unix_time" \
+run_test    "ServerHello contains gmt_unix_time" \
             "$P_SRV debug_level=3" \
             "$P_CLI debug_level=3" \
             0 \
-            -s "Protocol is TLSv1.2" \
-            -s "Ciphersuite is TLS-ECDHE-ECDSA-WITH-AES-256-GCM-SHA384" \
-            -s "client hello v3, signature_algorithm ext: 6" \
-            -s "ECDHE curve: secp521r1" \
-            -S "error" \
-            -C "error" \
             -f "check_server_hello_time" \
             -F "check_server_hello_time"
 
@@ -926,6 +1262,35 @@ run_test    "SHA-256 allowed by default in client certificate" \
             "$P_SRV auth_mode=required allow_sha1=0" \
             "$P_CLI key_file=data_files/cli-rsa.key crt_file=data_files/cli-rsa-sha256.crt" \
             0
+
+# Tests for datagram packing
+run_test    "DTLS: multiple records in same datagram, client and server" \
+            "$P_SRV dtls=1 dgram_packing=1 debug_level=2" \
+            "$P_CLI dtls=1 dgram_packing=1 debug_level=2" \
+            0 \
+            -c "next record in same datagram" \
+            -s "next record in same datagram"
+
+run_test    "DTLS: multiple records in same datagram, client only" \
+            "$P_SRV dtls=1 dgram_packing=0 debug_level=2" \
+            "$P_CLI dtls=1 dgram_packing=1 debug_level=2" \
+            0 \
+            -s "next record in same datagram" \
+            -C "next record in same datagram"
+
+run_test    "DTLS: multiple records in same datagram, server only" \
+            "$P_SRV dtls=1 dgram_packing=1 debug_level=2" \
+            "$P_CLI dtls=1 dgram_packing=0 debug_level=2" \
+            0 \
+            -S "next record in same datagram" \
+            -c "next record in same datagram"
+
+run_test    "DTLS: multiple records in same datagram, neither client nor server" \
+            "$P_SRV dtls=1 dgram_packing=0 debug_level=2" \
+            "$P_CLI dtls=1 dgram_packing=0 debug_level=2" \
+            0 \
+            -S "next record in same datagram" \
+            -C "next record in same datagram"
 
 # Tests for Truncated HMAC extension
 
@@ -1495,10 +1860,13 @@ run_test    "Session resume using tickets, DTLS: openssl server" \
             -c "parse new session ticket" \
             -c "a session has been resumed"
 
+# For reasons that aren't fully understood, this test randomly fails with high
+# probability with OpenSSL 1.0.2g on the CI, see #5012.
+requires_openssl_next
 run_test    "Session resume using tickets, DTLS: openssl client" \
             "$P_SRV dtls=1 debug_level=3 tickets=1" \
-            "( $O_CLI -dtls1 -sess_out $SESSION; \
-               $O_CLI -dtls1 -sess_in $SESSION; \
+            "( $O_NEXT_CLI -dtls1 -sess_out $SESSION; \
+               $O_NEXT_CLI -dtls1 -sess_in $SESSION; \
                rm -f $SESSION )" \
             0 \
             -s "found session ticket extension" \
@@ -1677,10 +2045,13 @@ run_test    "Session resume using cache, DTLS: no timeout" \
             -s "a session has been resumed" \
             -c "a session has been resumed"
 
+# For reasons that aren't fully understood, this test randomly fails with high
+# probability with OpenSSL 1.0.2g on the CI, see #5012.
+requires_openssl_next
 run_test    "Session resume using cache, DTLS: openssl client" \
             "$P_SRV dtls=1 debug_level=3 tickets=0" \
-            "( $O_CLI -dtls1 -sess_out $SESSION; \
-               $O_CLI -dtls1 -sess_in $SESSION; \
+            "( $O_NEXT_CLI -dtls1 -sess_out $SESSION; \
+               $O_NEXT_CLI -dtls1 -sess_in $SESSION; \
                rm -f $SESSION )" \
             0 \
             -s "found session ticket extension" \
@@ -1699,28 +2070,13 @@ run_test    "Session resume using cache, DTLS: openssl server" \
 
 # Tests for Max Fragment Length extension
 
-MAX_CONTENT_LEN_EXPECT='16384'
-MAX_CONTENT_LEN_CONFIG=$( ../scripts/config.pl get MBEDTLS_SSL_MAX_CONTENT_LEN)
-
-if [ -n "$MAX_CONTENT_LEN_CONFIG" ] && [ "$MAX_CONTENT_LEN_CONFIG" -ne "$MAX_CONTENT_LEN_EXPECT" ]; then
-  cat <<EOF
-The ${CONFIG_H} file contains a value for the configuration of
-MBEDTLS_SSL_MAX_CONTENT_LEN that is different from the script’s
-test value of ${MAX_CONTENT_LEN_EXPECT}.
-
-The tests assume this value and if it changes, the tests in this
-script should also be adjusted.
-EOF
-    exit 1
-fi
-
 requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
 run_test    "Max fragment length: enabled, default" \
             "$P_SRV debug_level=3" \
             "$P_CLI debug_level=3" \
             0 \
-            -c "Maximum fragment length is 16384" \
-            -s "Maximum fragment length is 16384" \
+            -c "Maximum fragment length is $MAX_CONTENT_LEN" \
+            -s "Maximum fragment length is $MAX_CONTENT_LEN" \
             -C "client hello, adding max_fragment_length extension" \
             -S "found max fragment length extension" \
             -S "server hello, max_fragment_length extension" \
@@ -1729,51 +2085,56 @@ run_test    "Max fragment length: enabled, default" \
 requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
 run_test    "Max fragment length: enabled, default, larger message" \
             "$P_SRV debug_level=3" \
-            "$P_CLI debug_level=3 request_size=16385" \
+            "$P_CLI debug_level=3 request_size=$(( $MAX_CONTENT_LEN + 1))" \
             0 \
-            -c "Maximum fragment length is 16384" \
-            -s "Maximum fragment length is 16384" \
+            -c "Maximum fragment length is $MAX_CONTENT_LEN" \
+            -s "Maximum fragment length is $MAX_CONTENT_LEN" \
             -C "client hello, adding max_fragment_length extension" \
             -S "found max fragment length extension" \
             -S "server hello, max_fragment_length extension" \
             -C "found max_fragment_length extension" \
-            -c "16385 bytes written in 2 fragments" \
-            -s "16384 bytes read" \
+            -c "$(( $MAX_CONTENT_LEN + 1)) bytes written in 2 fragments" \
+            -s "$MAX_CONTENT_LEN bytes read" \
             -s "1 bytes read"
 
 requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
 run_test    "Max fragment length, DTLS: enabled, default, larger message" \
             "$P_SRV debug_level=3 dtls=1" \
-            "$P_CLI debug_level=3 dtls=1 request_size=16385" \
+            "$P_CLI debug_level=3 dtls=1 request_size=$(( $MAX_CONTENT_LEN + 1))" \
             1 \
-            -c "Maximum fragment length is 16384" \
-            -s "Maximum fragment length is 16384" \
+            -c "Maximum fragment length is $MAX_CONTENT_LEN" \
+            -s "Maximum fragment length is $MAX_CONTENT_LEN" \
             -C "client hello, adding max_fragment_length extension" \
             -S "found max fragment length extension" \
             -S "server hello, max_fragment_length extension" \
             -C "found max_fragment_length extension" \
             -c "fragment larger than.*maximum "
 
+# Run some tests with MBEDTLS_SSL_MAX_FRAGMENT_LENGTH disabled
+# (session fragment length will be 16384 regardless of mbedtls
+# content length configuration.)
+
 requires_config_disabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
 run_test    "Max fragment length: disabled, larger message" \
             "$P_SRV debug_level=3" \
-            "$P_CLI debug_level=3 request_size=16385" \
+            "$P_CLI debug_level=3 request_size=$(( $MAX_CONTENT_LEN + 1))" \
             0 \
             -C "Maximum fragment length is 16384" \
             -S "Maximum fragment length is 16384" \
-            -c "16385 bytes written in 2 fragments" \
-            -s "16384 bytes read" \
+            -c "$(( $MAX_CONTENT_LEN + 1)) bytes written in 2 fragments" \
+            -s "$MAX_CONTENT_LEN bytes read" \
             -s "1 bytes read"
 
 requires_config_disabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
-run_test    "Max fragment length DTLS: disabled, larger message" \
+run_test    "Max fragment length, DTLS: disabled, larger message" \
             "$P_SRV debug_level=3 dtls=1" \
-            "$P_CLI debug_level=3 dtls=1 request_size=16385" \
+            "$P_CLI debug_level=3 dtls=1 request_size=$(( $MAX_CONTENT_LEN + 1))" \
             1 \
             -C "Maximum fragment length is 16384" \
             -S "Maximum fragment length is 16384" \
             -c "fragment larger than.*maximum "
 
+requires_max_content_len 4096
 requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
 run_test    "Max fragment length: used by client" \
             "$P_SRV debug_level=3" \
@@ -1786,18 +2147,20 @@ run_test    "Max fragment length: used by client" \
             -s "server hello, max_fragment_length extension" \
             -c "found max_fragment_length extension"
 
+requires_max_content_len 4096
 requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
 run_test    "Max fragment length: used by server" \
             "$P_SRV debug_level=3 max_frag_len=4096" \
             "$P_CLI debug_level=3" \
             0 \
-            -c "Maximum fragment length is 16384" \
+            -c "Maximum fragment length is $MAX_CONTENT_LEN" \
             -s "Maximum fragment length is 4096" \
             -C "client hello, adding max_fragment_length extension" \
             -S "found max fragment length extension" \
             -S "server hello, max_fragment_length extension" \
             -C "found max_fragment_length extension"
 
+requires_max_content_len 4096
 requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
 requires_gnutls
 run_test    "Max fragment length: gnutls server" \
@@ -1808,6 +2171,7 @@ run_test    "Max fragment length: gnutls server" \
             -c "client hello, adding max_fragment_length extension" \
             -c "found max_fragment_length extension"
 
+requires_max_content_len 2048
 requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
 run_test    "Max fragment length: client, message just fits" \
             "$P_SRV debug_level=3" \
@@ -1822,6 +2186,7 @@ run_test    "Max fragment length: client, message just fits" \
             -c "2048 bytes written in 1 fragments" \
             -s "2048 bytes read"
 
+requires_max_content_len 2048
 requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
 run_test    "Max fragment length: client, larger message" \
             "$P_SRV debug_level=3" \
@@ -1837,6 +2202,7 @@ run_test    "Max fragment length: client, larger message" \
             -s "2048 bytes read" \
             -s "297 bytes read"
 
+requires_max_content_len 2048
 requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
 run_test    "Max fragment length: DTLS client, larger message" \
             "$P_SRV debug_level=3 dtls=1" \
@@ -2295,7 +2661,7 @@ run_test    "Renego ext: gnutls server unsafe, client break legacy" \
 requires_gnutls
 run_test    "Renego ext: gnutls client strict, server default" \
             "$P_SRV debug_level=3" \
-            "$G_CLI --priority=NORMAL:%SAFE_RENEGOTIATION" \
+            "$G_CLI --priority=NORMAL:%SAFE_RENEGOTIATION localhost" \
             0 \
             -s "received TLS_EMPTY_RENEGOTIATION_INFO\|found renegotiation extension" \
             -s "server hello, secure renegotiation extension"
@@ -2303,7 +2669,7 @@ run_test    "Renego ext: gnutls client strict, server default" \
 requires_gnutls
 run_test    "Renego ext: gnutls client unsafe, server default" \
             "$P_SRV debug_level=3" \
-            "$G_CLI --priority=NORMAL:%DISABLE_SAFE_RENEGOTIATION" \
+            "$G_CLI --priority=NORMAL:%DISABLE_SAFE_RENEGOTIATION localhost" \
             0 \
             -S "received TLS_EMPTY_RENEGOTIATION_INFO\|found renegotiation extension" \
             -S "server hello, secure renegotiation extension"
@@ -2311,7 +2677,7 @@ run_test    "Renego ext: gnutls client unsafe, server default" \
 requires_gnutls
 run_test    "Renego ext: gnutls client unsafe, server break legacy" \
             "$P_SRV debug_level=3 allow_legacy=-1" \
-            "$G_CLI --priority=NORMAL:%DISABLE_SAFE_RENEGOTIATION" \
+            "$G_CLI --priority=NORMAL:%DISABLE_SAFE_RENEGOTIATION localhost" \
             1 \
             -S "received TLS_EMPTY_RENEGOTIATION_INFO\|found renegotiation extension" \
             -S "server hello, secure renegotiation extension"
@@ -2322,7 +2688,7 @@ requires_gnutls
 run_test    "DER format: no trailing bytes" \
             "$P_SRV crt_file=data_files/server5-der0.crt \
              key_file=data_files/server5.key" \
-            "$G_CLI " \
+            "$G_CLI localhost" \
             0 \
             -c "Handshake was completed" \
 
@@ -2330,7 +2696,7 @@ requires_gnutls
 run_test    "DER format: with a trailing zero byte" \
             "$P_SRV crt_file=data_files/server5-der1a.crt \
              key_file=data_files/server5.key" \
-            "$G_CLI " \
+            "$G_CLI localhost" \
             0 \
             -c "Handshake was completed" \
 
@@ -2338,7 +2704,7 @@ requires_gnutls
 run_test    "DER format: with a trailing random byte" \
             "$P_SRV crt_file=data_files/server5-der1b.crt \
              key_file=data_files/server5.key" \
-            "$G_CLI " \
+            "$G_CLI localhost" \
             0 \
             -c "Handshake was completed" \
 
@@ -2346,7 +2712,7 @@ requires_gnutls
 run_test    "DER format: with 2 trailing random bytes" \
             "$P_SRV crt_file=data_files/server5-der2.crt \
              key_file=data_files/server5.key" \
-            "$G_CLI " \
+            "$G_CLI localhost" \
             0 \
             -c "Handshake was completed" \
 
@@ -2354,7 +2720,7 @@ requires_gnutls
 run_test    "DER format: with 4 trailing random bytes" \
             "$P_SRV crt_file=data_files/server5-der4.crt \
              key_file=data_files/server5.key" \
-            "$G_CLI " \
+            "$G_CLI localhost" \
             0 \
             -c "Handshake was completed" \
 
@@ -2362,7 +2728,7 @@ requires_gnutls
 run_test    "DER format: with 8 trailing random bytes" \
             "$P_SRV crt_file=data_files/server5-der8.crt \
              key_file=data_files/server5.key" \
-            "$G_CLI " \
+            "$G_CLI localhost" \
             0 \
             -c "Handshake was completed" \
 
@@ -2370,7 +2736,7 @@ requires_gnutls
 run_test    "DER format: with 9 trailing random bytes" \
             "$P_SRV crt_file=data_files/server5-der9.crt \
              key_file=data_files/server5.key" \
-            "$G_CLI " \
+            "$G_CLI localhost" \
             0 \
             -c "Handshake was completed" \
 
@@ -2641,24 +3007,18 @@ run_test    "Authentication: client no cert, ssl3" \
             -C "! mbedtls_ssl_handshake returned" \
             -S "X509 - Certificate verification failed"
 
-# The "max_int chain" tests assume that MAX_INTERMEDIATE_CA is set to its
-# default value (8)
+# This script assumes that MBEDTLS_X509_MAX_INTERMEDIATE_CA has its default
+# value, defined here as MAX_IM_CA. Some test cases will be skipped if the
+# library is configured with a different value.
 
 MAX_IM_CA='8'
-MAX_IM_CA_CONFIG=$( ../scripts/config.pl get MBEDTLS_X509_MAX_INTERMEDIATE_CA)
 
-if [ -n "$MAX_IM_CA_CONFIG" ] && [ "$MAX_IM_CA_CONFIG" -ne "$MAX_IM_CA" ]; then
-    cat <<EOF
-${CONFIG_H} contains a value for the configuration of
-MBEDTLS_X509_MAX_INTERMEDIATE_CA that is different from the script's
-test value of ${MAX_IM_CA}.
-
-The tests assume this value and if it changes, the tests in this
-script should also be adjusted.
-EOF
-    exit 1
-fi
-
+# The tests for the max_int tests can pass with any number higher than MAX_IM_CA
+# because only a chain of MAX_IM_CA length is tested. Equally, the max_int+1
+# tests can pass with any number less than MAX_IM_CA. However, stricter preconditions
+# are in place so that the semantics are consistent with the test description.
+requires_config_value_equals "MBEDTLS_X509_MAX_INTERMEDIATE_CA" $MAX_IM_CA
+requires_full_size_output_buffer
 run_test    "Authentication: server max_int chain, client default" \
             "$P_SRV crt_file=data_files/dir-maxpath/c09.pem \
                     key_file=data_files/dir-maxpath/09.key" \
@@ -2666,6 +3026,8 @@ run_test    "Authentication: server max_int chain, client default" \
             0 \
             -C "X509 - A fatal error occurred"
 
+requires_config_value_equals "MBEDTLS_X509_MAX_INTERMEDIATE_CA" $MAX_IM_CA
+requires_full_size_output_buffer
 run_test    "Authentication: server max_int+1 chain, client default" \
             "$P_SRV crt_file=data_files/dir-maxpath/c10.pem \
                     key_file=data_files/dir-maxpath/10.key" \
@@ -2673,6 +3035,8 @@ run_test    "Authentication: server max_int+1 chain, client default" \
             1 \
             -c "X509 - A fatal error occurred"
 
+requires_config_value_equals "MBEDTLS_X509_MAX_INTERMEDIATE_CA" $MAX_IM_CA
+requires_full_size_output_buffer
 run_test    "Authentication: server max_int+1 chain, client optional" \
             "$P_SRV crt_file=data_files/dir-maxpath/c10.pem \
                     key_file=data_files/dir-maxpath/10.key" \
@@ -2681,6 +3045,8 @@ run_test    "Authentication: server max_int+1 chain, client optional" \
             1 \
             -c "X509 - A fatal error occurred"
 
+requires_config_value_equals "MBEDTLS_X509_MAX_INTERMEDIATE_CA" $MAX_IM_CA
+requires_full_size_output_buffer
 run_test    "Authentication: server max_int+1 chain, client none" \
             "$P_SRV crt_file=data_files/dir-maxpath/c10.pem \
                     key_file=data_files/dir-maxpath/10.key" \
@@ -2689,6 +3055,8 @@ run_test    "Authentication: server max_int+1 chain, client none" \
             0 \
             -C "X509 - A fatal error occurred"
 
+requires_config_value_equals "MBEDTLS_X509_MAX_INTERMEDIATE_CA" $MAX_IM_CA
+requires_full_size_output_buffer
 run_test    "Authentication: client max_int+1 chain, server default" \
             "$P_SRV ca_file=data_files/dir-maxpath/00.crt" \
             "$P_CLI crt_file=data_files/dir-maxpath/c10.pem \
@@ -2696,6 +3064,8 @@ run_test    "Authentication: client max_int+1 chain, server default" \
             0 \
             -S "X509 - A fatal error occurred"
 
+requires_config_value_equals "MBEDTLS_X509_MAX_INTERMEDIATE_CA" $MAX_IM_CA
+requires_full_size_output_buffer
 run_test    "Authentication: client max_int+1 chain, server optional" \
             "$P_SRV ca_file=data_files/dir-maxpath/00.crt auth_mode=optional" \
             "$P_CLI crt_file=data_files/dir-maxpath/c10.pem \
@@ -2703,6 +3073,8 @@ run_test    "Authentication: client max_int+1 chain, server optional" \
             1 \
             -s "X509 - A fatal error occurred"
 
+requires_config_value_equals "MBEDTLS_X509_MAX_INTERMEDIATE_CA" $MAX_IM_CA
+requires_full_size_output_buffer
 run_test    "Authentication: client max_int+1 chain, server required" \
             "$P_SRV ca_file=data_files/dir-maxpath/00.crt auth_mode=required" \
             "$P_CLI crt_file=data_files/dir-maxpath/c10.pem \
@@ -2710,6 +3082,8 @@ run_test    "Authentication: client max_int+1 chain, server required" \
             1 \
             -s "X509 - A fatal error occurred"
 
+requires_config_value_equals "MBEDTLS_X509_MAX_INTERMEDIATE_CA" $MAX_IM_CA
+requires_full_size_output_buffer
 run_test    "Authentication: client max_int chain, server required" \
             "$P_SRV ca_file=data_files/dir-maxpath/00.crt auth_mode=required" \
             "$P_CLI crt_file=data_files/dir-maxpath/c09.pem \
@@ -3127,6 +3501,118 @@ run_test    "Non-blocking I/O: session-id resume" \
             0 \
             -S "mbedtls_ssl_handshake returned" \
             -C "mbedtls_ssl_handshake returned" \
+            -c "Read from server: .* bytes read"
+
+# Tests for event-driven I/O: exercise a variety of handshake flows
+
+run_test    "Event-driven I/O: basic handshake" \
+            "$P_SRV event=1 tickets=0 auth_mode=none" \
+            "$P_CLI event=1 tickets=0" \
+            0 \
+            -S "mbedtls_ssl_handshake returned" \
+            -C "mbedtls_ssl_handshake returned" \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O: client auth" \
+            "$P_SRV event=1 tickets=0 auth_mode=required" \
+            "$P_CLI event=1 tickets=0" \
+            0 \
+            -S "mbedtls_ssl_handshake returned" \
+            -C "mbedtls_ssl_handshake returned" \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O: ticket" \
+            "$P_SRV event=1 tickets=1 auth_mode=none" \
+            "$P_CLI event=1 tickets=1" \
+            0 \
+            -S "mbedtls_ssl_handshake returned" \
+            -C "mbedtls_ssl_handshake returned" \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O: ticket + client auth" \
+            "$P_SRV event=1 tickets=1 auth_mode=required" \
+            "$P_CLI event=1 tickets=1" \
+            0 \
+            -S "mbedtls_ssl_handshake returned" \
+            -C "mbedtls_ssl_handshake returned" \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O: ticket + client auth + resume" \
+            "$P_SRV event=1 tickets=1 auth_mode=required" \
+            "$P_CLI event=1 tickets=1 reconnect=1" \
+            0 \
+            -S "mbedtls_ssl_handshake returned" \
+            -C "mbedtls_ssl_handshake returned" \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O: ticket + resume" \
+            "$P_SRV event=1 tickets=1 auth_mode=none" \
+            "$P_CLI event=1 tickets=1 reconnect=1" \
+            0 \
+            -S "mbedtls_ssl_handshake returned" \
+            -C "mbedtls_ssl_handshake returned" \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O: session-id resume" \
+            "$P_SRV event=1 tickets=0 auth_mode=none" \
+            "$P_CLI event=1 tickets=0 reconnect=1" \
+            0 \
+            -S "mbedtls_ssl_handshake returned" \
+            -C "mbedtls_ssl_handshake returned" \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O, DTLS: basic handshake" \
+            "$P_SRV dtls=1 event=1 tickets=0 auth_mode=none" \
+            "$P_CLI dtls=1 event=1 tickets=0" \
+            0 \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O, DTLS: client auth" \
+            "$P_SRV dtls=1 event=1 tickets=0 auth_mode=required" \
+            "$P_CLI dtls=1 event=1 tickets=0" \
+            0 \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O, DTLS: ticket" \
+            "$P_SRV dtls=1 event=1 tickets=1 auth_mode=none" \
+            "$P_CLI dtls=1 event=1 tickets=1" \
+            0 \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O, DTLS: ticket + client auth" \
+            "$P_SRV dtls=1 event=1 tickets=1 auth_mode=required" \
+            "$P_CLI dtls=1 event=1 tickets=1" \
+            0 \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O, DTLS: ticket + client auth + resume" \
+            "$P_SRV dtls=1 event=1 tickets=1 auth_mode=required" \
+            "$P_CLI dtls=1 event=1 tickets=1 reconnect=1 skip_close_notify=1" \
+            0 \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O, DTLS: ticket + resume" \
+            "$P_SRV dtls=1 event=1 tickets=1 auth_mode=none" \
+            "$P_CLI dtls=1 event=1 tickets=1 reconnect=1 skip_close_notify=1" \
+            0 \
+            -c "Read from server: .* bytes read"
+
+run_test    "Event-driven I/O, DTLS: session-id resume" \
+            "$P_SRV dtls=1 event=1 tickets=0 auth_mode=none" \
+            "$P_CLI dtls=1 event=1 tickets=0 reconnect=1 skip_close_notify=1" \
+            0 \
+            -c "Read from server: .* bytes read"
+
+# This test demonstrates the need for the mbedtls_ssl_check_pending function.
+# During session resumption, the client will send its ApplicationData record
+# within the same datagram as the Finished messages. In this situation, the
+# server MUST NOT idle on the underlying transport after handshake completion,
+# because the ApplicationData request has already been queued internally.
+run_test    "Event-driven I/O, DTLS: session-id resume, UDP packing" \
+            -p "$P_PXY pack=50" \
+            "$P_SRV dtls=1 event=1 tickets=0 auth_mode=required" \
+            "$P_CLI dtls=1 event=1 tickets=0 reconnect=1 skip_close_notify=1" \
+            0 \
             -c "Read from server: .* bytes read"
 
 # Tests for version negotiation
@@ -3610,10 +4096,45 @@ run_test    "DHM size: server 1024, client default, OK" \
             0 \
             -C "DHM prime too short:"
 
+run_test    "DHM size: server 999, client 999, OK" \
+            "$P_SRV dhm_file=data_files/dh.999.pem" \
+            "$P_CLI force_ciphersuite=TLS-DHE-RSA-WITH-AES-128-CBC-SHA \
+                    debug_level=1 dhmlen=999" \
+            0 \
+            -C "DHM prime too short:"
+
+run_test    "DHM size: server 1000, client 1000, OK" \
+            "$P_SRV dhm_file=data_files/dh.1000.pem" \
+            "$P_CLI force_ciphersuite=TLS-DHE-RSA-WITH-AES-128-CBC-SHA \
+                    debug_level=1 dhmlen=1000" \
+            0 \
+            -C "DHM prime too short:"
+
 run_test    "DHM size: server 1000, client default, rejected" \
             "$P_SRV dhm_file=data_files/dh.1000.pem" \
             "$P_CLI force_ciphersuite=TLS-DHE-RSA-WITH-AES-128-CBC-SHA \
                     debug_level=1" \
+            1 \
+            -c "DHM prime too short:"
+
+run_test    "DHM size: server 1000, client 1001, rejected" \
+            "$P_SRV dhm_file=data_files/dh.1000.pem" \
+            "$P_CLI force_ciphersuite=TLS-DHE-RSA-WITH-AES-128-CBC-SHA \
+                    debug_level=1 dhmlen=1001" \
+            1 \
+            -c "DHM prime too short:"
+
+run_test    "DHM size: server 999, client 1000, rejected" \
+            "$P_SRV dhm_file=data_files/dh.999.pem" \
+            "$P_CLI force_ciphersuite=TLS-DHE-RSA-WITH-AES-128-CBC-SHA \
+                    debug_level=1 dhmlen=1000" \
+            1 \
+            -c "DHM prime too short:"
+
+run_test    "DHM size: server 998, client 999, rejected" \
+            "$P_SRV dhm_file=data_files/dh.998.pem" \
+            "$P_CLI force_ciphersuite=TLS-DHE-RSA-WITH-AES-128-CBC-SHA \
+                    debug_level=1 dhmlen=999" \
             1 \
             -c "DHM prime too short:"
 
@@ -3738,7 +4259,7 @@ run_test    "ECJPAKE: working, TLS" \
             -S "SSL - Verification of the message MAC failed"
 
 server_needs_more_time 1
-requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECJPAKE
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECJPAKE_ENABLED
 run_test    "ECJPAKE: password mismatch, TLS" \
             "$P_SRV debug_level=3 ecjpake_pw=bla" \
             "$P_CLI debug_level=3 ecjpake_pw=bad \
@@ -3747,7 +4268,7 @@ run_test    "ECJPAKE: password mismatch, TLS" \
             -C "re-using cached ecjpake parameters" \
             -s "SSL - Verification of the message MAC failed"
 
-requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECJPAKE
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECJPAKE_ENABLED
 run_test    "ECJPAKE: working, DTLS" \
             "$P_SRV debug_level=3 dtls=1 ecjpake_pw=bla" \
             "$P_CLI debug_level=3 dtls=1 ecjpake_pw=bla \
@@ -3756,7 +4277,7 @@ run_test    "ECJPAKE: working, DTLS" \
             -c "re-using cached ecjpake parameters" \
             -S "SSL - Verification of the message MAC failed"
 
-requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECJPAKE
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECJPAKE_ENABLED
 run_test    "ECJPAKE: working, DTLS, no cookie" \
             "$P_SRV debug_level=3 dtls=1 ecjpake_pw=bla cookies=0" \
             "$P_CLI debug_level=3 dtls=1 ecjpake_pw=bla \
@@ -3766,7 +4287,7 @@ run_test    "ECJPAKE: working, DTLS, no cookie" \
             -S "SSL - Verification of the message MAC failed"
 
 server_needs_more_time 1
-requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECJPAKE
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECJPAKE_ENABLED
 run_test    "ECJPAKE: password mismatch, DTLS" \
             "$P_SRV debug_level=3 dtls=1 ecjpake_pw=bla" \
             "$P_CLI debug_level=3 dtls=1 ecjpake_pw=bad \
@@ -3776,7 +4297,7 @@ run_test    "ECJPAKE: password mismatch, DTLS" \
             -s "SSL - Verification of the message MAC failed"
 
 # for tests with configs/config-thread.h
-requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECJPAKE
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECJPAKE_ENABLED
 run_test    "ECJPAKE: working, DTLS, nolog" \
             "$P_SRV dtls=1 ecjpake_pw=bla" \
             "$P_CLI dtls=1 ecjpake_pw=bla \
@@ -3826,7 +4347,7 @@ run_test    "Per-version suites: TLS 1.2" \
 requires_gnutls
 run_test    "ClientHello without extensions" \
             "$P_SRV debug_level=3" \
-            "$G_CLI --priority=NORMAL:%NO_EXTENSIONS:%DISABLE_SAFE_RENEGOTIATION" \
+            "$G_CLI --priority=NORMAL:%NO_EXTENSIONS:%DISABLE_SAFE_RENEGOTIATION localhost" \
             0 \
             -s "dumping 'client hello extensions' (0 bytes)"
 
@@ -4423,7 +4944,7 @@ run_test    "Small server packet DTLS 1.2, without EtM, truncated MAC" \
             -c "Read from server: 1 bytes read"
 
 # A test for extensions in SSLv3
-
+requires_max_content_len 4096
 requires_config_enabled MBEDTLS_SSL_PROTO_SSL3
 run_test    "SSLv3 with extensions, server side" \
             "$P_SRV min_version=ssl3 debug_level=3" \
@@ -4434,14 +4955,19 @@ run_test    "SSLv3 with extensions, server side" \
 
 # Test for large client packets
 
+# How many fragments do we expect to write $1 bytes?
+fragments_for_write() {
+    echo "$(( ( $1 + $MAX_OUT_LEN - 1 ) / $MAX_OUT_LEN ))"
+}
+
 requires_config_enabled MBEDTLS_SSL_PROTO_SSL3
 run_test    "Large client packet SSLv3 BlockCipher" \
             "$P_SRV min_version=ssl3" \
             "$P_CLI request_size=16384 force_version=ssl3 recsplit=0 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_PROTO_SSL3
 run_test    "Large client packet SSLv3 StreamCipher" \
@@ -4449,23 +4975,23 @@ run_test    "Large client packet SSLv3 StreamCipher" \
             "$P_CLI request_size=16384 force_version=ssl3 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.0 BlockCipher" \
             "$P_SRV" \
             "$P_CLI request_size=16384 force_version=tls1 recsplit=0 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.0 BlockCipher, without EtM" \
             "$P_SRV" \
             "$P_CLI request_size=16384 force_version=tls1 etm=0 recsplit=0 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_TRUNCATED_HMAC
 run_test    "Large client packet TLS 1.0 BlockCipher, truncated MAC" \
@@ -4473,8 +4999,8 @@ run_test    "Large client packet TLS 1.0 BlockCipher, truncated MAC" \
             "$P_CLI request_size=16384 force_version=tls1 recsplit=0 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA trunc_hmac=1" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_TRUNCATED_HMAC
 run_test    "Large client packet TLS 1.0 BlockCipher, without EtM, truncated MAC" \
@@ -4482,21 +5008,21 @@ run_test    "Large client packet TLS 1.0 BlockCipher, without EtM, truncated MAC
             "$P_CLI request_size=16384 force_version=tls1 etm=0 recsplit=0 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA trunc_hmac=1" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.0 StreamCipher" \
             "$P_SRV arc4=1 force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             "$P_CLI request_size=16384 force_version=tls1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.0 StreamCipher, without EtM" \
             "$P_SRV arc4=1 force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             "$P_CLI request_size=16384 force_version=tls1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA etm=0" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_TRUNCATED_HMAC
 run_test    "Large client packet TLS 1.0 StreamCipher, truncated MAC" \
@@ -4504,7 +5030,7 @@ run_test    "Large client packet TLS 1.0 StreamCipher, truncated MAC" \
             "$P_CLI request_size=16384 force_version=tls1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA trunc_hmac=1" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_TRUNCATED_HMAC
 run_test    "Large client packet TLS 1.0 StreamCipher, without EtM, truncated MAC" \
@@ -4512,23 +5038,23 @@ run_test    "Large client packet TLS 1.0 StreamCipher, without EtM, truncated MA
             "$P_CLI request_size=16384 force_version=tls1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA trunc_hmac=1 etm=0" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.1 BlockCipher" \
             "$P_SRV" \
             "$P_CLI request_size=16384 force_version=tls1_1 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.1 BlockCipher, without EtM" \
             "$P_SRV" \
             "$P_CLI request_size=16384 force_version=tls1_1 etm=0 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_TRUNCATED_HMAC
 run_test    "Large client packet TLS 1.1 BlockCipher, truncated MAC" \
@@ -4536,7 +5062,7 @@ run_test    "Large client packet TLS 1.1 BlockCipher, truncated MAC" \
             "$P_CLI request_size=16384 force_version=tls1_1 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA trunc_hmac=1" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_TRUNCATED_HMAC
 run_test    "Large client packet TLS 1.1 BlockCipher, without EtM, truncated MAC" \
@@ -4544,23 +5070,23 @@ run_test    "Large client packet TLS 1.1 BlockCipher, without EtM, truncated MAC
             "$P_CLI request_size=16384 force_version=tls1_1 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA trunc_hmac=1 etm=0" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.1 StreamCipher" \
             "$P_SRV arc4=1 force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             "$P_CLI request_size=16384 force_version=tls1_1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.1 StreamCipher, without EtM" \
             "$P_SRV arc4=1 force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             "$P_CLI request_size=16384 force_version=tls1_1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA etm=0" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_TRUNCATED_HMAC
 run_test    "Large client packet TLS 1.1 StreamCipher, truncated MAC" \
@@ -4568,7 +5094,7 @@ run_test    "Large client packet TLS 1.1 StreamCipher, truncated MAC" \
             "$P_CLI request_size=16384 force_version=tls1_1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA trunc_hmac=1" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_TRUNCATED_HMAC
 run_test    "Large client packet TLS 1.1 StreamCipher, without EtM, truncated MAC" \
@@ -4576,31 +5102,31 @@ run_test    "Large client packet TLS 1.1 StreamCipher, without EtM, truncated MA
             "$P_CLI request_size=16384 force_version=tls1_1 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA trunc_hmac=1 etm=0" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.2 BlockCipher" \
             "$P_SRV" \
             "$P_CLI request_size=16384 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.2 BlockCipher, without EtM" \
             "$P_SRV" \
             "$P_CLI request_size=16384 force_version=tls1_2 etm=0 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.2 BlockCipher larger MAC" \
             "$P_SRV" \
             "$P_CLI request_size=16384 force_version=tls1_2 \
              force_ciphersuite=TLS-ECDHE-RSA-WITH-AES-256-CBC-SHA384" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_TRUNCATED_HMAC
 run_test    "Large client packet TLS 1.2 BlockCipher, truncated MAC" \
@@ -4608,7 +5134,7 @@ run_test    "Large client packet TLS 1.2 BlockCipher, truncated MAC" \
             "$P_CLI request_size=16384 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA trunc_hmac=1" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_TRUNCATED_HMAC
 run_test    "Large client packet TLS 1.2 BlockCipher, without EtM, truncated MAC" \
@@ -4616,23 +5142,23 @@ run_test    "Large client packet TLS 1.2 BlockCipher, without EtM, truncated MAC
             "$P_CLI request_size=16384 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CBC-SHA trunc_hmac=1 etm=0" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.2 StreamCipher" \
             "$P_SRV arc4=1 force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             "$P_CLI request_size=16384 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.2 StreamCipher, without EtM" \
             "$P_SRV arc4=1 force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
             "$P_CLI request_size=16384 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA etm=0" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_TRUNCATED_HMAC
 run_test    "Large client packet TLS 1.2 StreamCipher, truncated MAC" \
@@ -4640,7 +5166,7 @@ run_test    "Large client packet TLS 1.2 StreamCipher, truncated MAC" \
             "$P_CLI request_size=16384 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA trunc_hmac=1" \
             0 \
-            -s "Read from client: 16384 bytes read"
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 requires_config_enabled MBEDTLS_SSL_TRUNCATED_HMAC
 run_test    "Large client packet TLS 1.2 StreamCipher, without EtM, truncated MAC" \
@@ -4648,76 +5174,27 @@ run_test    "Large client packet TLS 1.2 StreamCipher, without EtM, truncated MA
             "$P_CLI request_size=16384 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA trunc_hmac=1 etm=0" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.2 AEAD" \
             "$P_SRV" \
             "$P_CLI request_size=16384 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CCM" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 run_test    "Large client packet TLS 1.2 AEAD shorter tag" \
             "$P_SRV" \
             "$P_CLI request_size=16384 force_version=tls1_2 \
              force_ciphersuite=TLS-RSA-WITH-AES-256-CCM-8" \
             0 \
-            -c "16384 bytes written in 1 fragments" \
-            -s "Read from client: 16384 bytes read"
-
-# Tests for ECC extensions (rfc 4492)
-
-requires_config_enabled MBEDTLS_AES_C
-requires_config_enabled MBEDTLS_CIPHER_MODE_CBC
-requires_config_enabled MBEDTLS_SHA256_C
-requires_config_enabled MBEDTLS_KEY_EXCHANGE_RSA_ENABLED
-run_test    "Force a non ECC ciphersuite in the client side" \
-            "$P_SRV debug_level=3" \
-            "$P_CLI debug_level=3 force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA256" \
-            0 \
-            -C "client hello, adding supported_elliptic_curves extension" \
-            -C "client hello, adding supported_point_formats extension" \
-            -S "found supported elliptic curves extension" \
-            -S "found supported point formats extension"
-
-requires_config_enabled MBEDTLS_AES_C
-requires_config_enabled MBEDTLS_CIPHER_MODE_CBC
-requires_config_enabled MBEDTLS_SHA256_C
-requires_config_enabled MBEDTLS_KEY_EXCHANGE_RSA_ENABLED
-run_test    "Force a non ECC ciphersuite in the server side" \
-            "$P_SRV debug_level=3 force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA256" \
-            "$P_CLI debug_level=3" \
-            0 \
-            -C "found supported_point_formats extension" \
-            -S "server hello, supported_point_formats extension"
-
-requires_config_enabled MBEDTLS_AES_C
-requires_config_enabled MBEDTLS_CIPHER_MODE_CBC
-requires_config_enabled MBEDTLS_SHA256_C
-requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
-run_test    "Force an ECC ciphersuite in the client side" \
-            "$P_SRV debug_level=3" \
-            "$P_CLI debug_level=3 force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA256" \
-            0 \
-            -c "client hello, adding supported_elliptic_curves extension" \
-            -c "client hello, adding supported_point_formats extension" \
-            -s "found supported elliptic curves extension" \
-            -s "found supported point formats extension"
-
-requires_config_enabled MBEDTLS_AES_C
-requires_config_enabled MBEDTLS_CIPHER_MODE_CBC
-requires_config_enabled MBEDTLS_SHA256_C
-requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
-run_test    "Force an ECC ciphersuite in the server side" \
-            "$P_SRV debug_level=3 force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA256" \
-            "$P_CLI debug_level=3" \
-            0 \
-            -c "found supported_point_formats extension" \
-            -s "server hello, supported_point_formats extension"
+            -c "16384 bytes written in $(fragments_for_write 16384) fragments" \
+            -s "Read from client: $MAX_CONTENT_LEN bytes read"
 
 # Test for large server packets
+# The tests below fail when the server's OUT_CONTENT_LEN is less than 16384.
 requires_config_enabled MBEDTLS_SSL_PROTO_SSL3
 run_test    "Large server packet SSLv3 StreamCipher" \
             "$P_SRV response_size=16384 min_version=ssl3 arc4=1 force_ciphersuite=TLS-RSA-WITH-RC4-128-SHA" \
@@ -4962,6 +5439,539 @@ run_test    "Large server packet TLS 1.2 AEAD shorter tag" \
             0 \
             -c "Read from server: 16384 bytes read"
 
+# Tests for restartable ECC
+
+requires_config_enabled MBEDTLS_ECP_RESTARTABLE
+run_test    "EC restart: TLS, default" \
+            "$P_SRV auth_mode=required" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt  \
+             debug_level=1" \
+            0 \
+            -C "x509_verify_cert.*4b00" \
+            -C "mbedtls_pk_verify.*4b00" \
+            -C "mbedtls_ecdh_make_public.*4b00" \
+            -C "mbedtls_pk_sign.*4b00"
+
+requires_config_enabled MBEDTLS_ECP_RESTARTABLE
+run_test    "EC restart: TLS, max_ops=0" \
+            "$P_SRV auth_mode=required" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt  \
+             debug_level=1 ec_max_ops=0" \
+            0 \
+            -C "x509_verify_cert.*4b00" \
+            -C "mbedtls_pk_verify.*4b00" \
+            -C "mbedtls_ecdh_make_public.*4b00" \
+            -C "mbedtls_pk_sign.*4b00"
+
+requires_config_enabled MBEDTLS_ECP_RESTARTABLE
+run_test    "EC restart: TLS, max_ops=65535" \
+            "$P_SRV auth_mode=required" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt  \
+             debug_level=1 ec_max_ops=65535" \
+            0 \
+            -C "x509_verify_cert.*4b00" \
+            -C "mbedtls_pk_verify.*4b00" \
+            -C "mbedtls_ecdh_make_public.*4b00" \
+            -C "mbedtls_pk_sign.*4b00"
+
+requires_config_enabled MBEDTLS_ECP_RESTARTABLE
+run_test    "EC restart: TLS, max_ops=1000" \
+            "$P_SRV auth_mode=required" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt  \
+             debug_level=1 ec_max_ops=1000" \
+            0 \
+            -c "x509_verify_cert.*4b00" \
+            -c "mbedtls_pk_verify.*4b00" \
+            -c "mbedtls_ecdh_make_public.*4b00" \
+            -c "mbedtls_pk_sign.*4b00"
+
+requires_config_enabled MBEDTLS_ECP_RESTARTABLE
+run_test    "EC restart: TLS, max_ops=1000, badsign" \
+            "$P_SRV auth_mode=required \
+             crt_file=data_files/server5-badsign.crt \
+             key_file=data_files/server5.key" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt  \
+             debug_level=1 ec_max_ops=1000" \
+            1 \
+            -c "x509_verify_cert.*4b00" \
+            -C "mbedtls_pk_verify.*4b00" \
+            -C "mbedtls_ecdh_make_public.*4b00" \
+            -C "mbedtls_pk_sign.*4b00" \
+            -c "! The certificate is not correctly signed by the trusted CA" \
+            -c "! mbedtls_ssl_handshake returned" \
+            -c "X509 - Certificate verification failed"
+
+requires_config_enabled MBEDTLS_ECP_RESTARTABLE
+run_test    "EC restart: TLS, max_ops=1000, auth_mode=optional badsign" \
+            "$P_SRV auth_mode=required \
+             crt_file=data_files/server5-badsign.crt \
+             key_file=data_files/server5.key" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt  \
+             debug_level=1 ec_max_ops=1000 auth_mode=optional" \
+            0 \
+            -c "x509_verify_cert.*4b00" \
+            -c "mbedtls_pk_verify.*4b00" \
+            -c "mbedtls_ecdh_make_public.*4b00" \
+            -c "mbedtls_pk_sign.*4b00" \
+            -c "! The certificate is not correctly signed by the trusted CA" \
+            -C "! mbedtls_ssl_handshake returned" \
+            -C "X509 - Certificate verification failed"
+
+requires_config_enabled MBEDTLS_ECP_RESTARTABLE
+run_test    "EC restart: TLS, max_ops=1000, auth_mode=none badsign" \
+            "$P_SRV auth_mode=required \
+             crt_file=data_files/server5-badsign.crt \
+             key_file=data_files/server5.key" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt  \
+             debug_level=1 ec_max_ops=1000 auth_mode=none" \
+            0 \
+            -C "x509_verify_cert.*4b00" \
+            -c "mbedtls_pk_verify.*4b00" \
+            -c "mbedtls_ecdh_make_public.*4b00" \
+            -c "mbedtls_pk_sign.*4b00" \
+            -C "! The certificate is not correctly signed by the trusted CA" \
+            -C "! mbedtls_ssl_handshake returned" \
+            -C "X509 - Certificate verification failed"
+
+requires_config_enabled MBEDTLS_ECP_RESTARTABLE
+run_test    "EC restart: DTLS, max_ops=1000" \
+            "$P_SRV auth_mode=required dtls=1" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt  \
+             dtls=1 debug_level=1 ec_max_ops=1000" \
+            0 \
+            -c "x509_verify_cert.*4b00" \
+            -c "mbedtls_pk_verify.*4b00" \
+            -c "mbedtls_ecdh_make_public.*4b00" \
+            -c "mbedtls_pk_sign.*4b00"
+
+requires_config_enabled MBEDTLS_ECP_RESTARTABLE
+run_test    "EC restart: TLS, max_ops=1000 no client auth" \
+            "$P_SRV" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             debug_level=1 ec_max_ops=1000" \
+            0 \
+            -c "x509_verify_cert.*4b00" \
+            -c "mbedtls_pk_verify.*4b00" \
+            -c "mbedtls_ecdh_make_public.*4b00" \
+            -C "mbedtls_pk_sign.*4b00"
+
+requires_config_enabled MBEDTLS_ECP_RESTARTABLE
+run_test    "EC restart: TLS, max_ops=1000, ECDHE-PSK" \
+            "$P_SRV psk=abc123" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-PSK-WITH-AES-128-CBC-SHA256 \
+             psk=abc123 debug_level=1 ec_max_ops=1000" \
+            0 \
+            -C "x509_verify_cert.*4b00" \
+            -C "mbedtls_pk_verify.*4b00" \
+            -C "mbedtls_ecdh_make_public.*4b00" \
+            -C "mbedtls_pk_sign.*4b00"
+
+# Tests of asynchronous private key support in SSL
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: sign, delay=0" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=0 async_private_delay2=0" \
+            "$P_CLI" \
+            0 \
+            -s "Async sign callback: using key slot " \
+            -s "Async resume (slot [0-9]): sign done, status=0"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: sign, delay=1" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 async_private_delay2=1" \
+            "$P_CLI" \
+            0 \
+            -s "Async sign callback: using key slot " \
+            -s "Async resume (slot [0-9]): call 0 more times." \
+            -s "Async resume (slot [0-9]): sign done, status=0"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: sign, delay=2" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=2 async_private_delay2=2" \
+            "$P_CLI" \
+            0 \
+            -s "Async sign callback: using key slot " \
+            -U "Async sign callback: using key slot " \
+            -s "Async resume (slot [0-9]): call 1 more times." \
+            -s "Async resume (slot [0-9]): call 0 more times." \
+            -s "Async resume (slot [0-9]): sign done, status=0"
+
+# Test that the async callback correctly signs the 36-byte hash of TLS 1.0/1.1
+# with RSA PKCS#1v1.5 as used in TLS 1.0/1.1.
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_1
+run_test    "SSL async private: sign, RSA, TLS 1.1" \
+            "$P_SRV key_file=data_files/server2.key crt_file=data_files/server2.crt \
+             async_operations=s async_private_delay1=0 async_private_delay2=0" \
+            "$P_CLI force_version=tls1_1" \
+            0 \
+            -s "Async sign callback: using key slot " \
+            -s "Async resume (slot [0-9]): sign done, status=0"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: sign, SNI" \
+            "$P_SRV debug_level=3 \
+             async_operations=s async_private_delay1=0 async_private_delay2=0 \
+             crt_file=data_files/server5.crt key_file=data_files/server5.key \
+             sni=localhost,data_files/server2.crt,data_files/server2.key,-,-,-,polarssl.example,data_files/server1-nospace.crt,data_files/server1.key,-,-,-" \
+            "$P_CLI server_name=polarssl.example" \
+            0 \
+            -s "Async sign callback: using key slot " \
+            -s "Async resume (slot [0-9]): sign done, status=0" \
+            -s "parse ServerName extension" \
+            -c "issuer name *: C=NL, O=PolarSSL, CN=PolarSSL Test CA" \
+            -c "subject name *: C=NL, O=PolarSSL, CN=polarssl.example"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: decrypt, delay=0" \
+            "$P_SRV \
+             async_operations=d async_private_delay1=0 async_private_delay2=0" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            0 \
+            -s "Async decrypt callback: using key slot " \
+            -s "Async resume (slot [0-9]): decrypt done, status=0"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: decrypt, delay=1" \
+            "$P_SRV \
+             async_operations=d async_private_delay1=1 async_private_delay2=1" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            0 \
+            -s "Async decrypt callback: using key slot " \
+            -s "Async resume (slot [0-9]): call 0 more times." \
+            -s "Async resume (slot [0-9]): decrypt done, status=0"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: decrypt RSA-PSK, delay=0" \
+            "$P_SRV psk=abc123 \
+             async_operations=d async_private_delay1=0 async_private_delay2=0" \
+            "$P_CLI psk=abc123 \
+             force_ciphersuite=TLS-RSA-PSK-WITH-AES-128-CBC-SHA256" \
+            0 \
+            -s "Async decrypt callback: using key slot " \
+            -s "Async resume (slot [0-9]): decrypt done, status=0"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: decrypt RSA-PSK, delay=1" \
+            "$P_SRV psk=abc123 \
+             async_operations=d async_private_delay1=1 async_private_delay2=1" \
+            "$P_CLI psk=abc123 \
+             force_ciphersuite=TLS-RSA-PSK-WITH-AES-128-CBC-SHA256" \
+            0 \
+            -s "Async decrypt callback: using key slot " \
+            -s "Async resume (slot [0-9]): call 0 more times." \
+            -s "Async resume (slot [0-9]): decrypt done, status=0"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: sign callback not present" \
+            "$P_SRV \
+             async_operations=d async_private_delay1=1 async_private_delay2=1" \
+            "$P_CLI; [ \$? -eq 1 ] &&
+             $P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            0 \
+            -S "Async sign callback" \
+            -s "! mbedtls_ssl_handshake returned" \
+            -s "The own private key or pre-shared key is not set, but needed" \
+            -s "Async resume (slot [0-9]): decrypt done, status=0" \
+            -s "Successful connection"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: decrypt callback not present" \
+            "$P_SRV debug_level=1 \
+             async_operations=s async_private_delay1=1 async_private_delay2=1" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA;
+             [ \$? -eq 1 ] && $P_CLI" \
+            0 \
+            -S "Async decrypt callback" \
+            -s "! mbedtls_ssl_handshake returned" \
+            -s "got no RSA private key" \
+            -s "Async resume (slot [0-9]): sign done, status=0" \
+            -s "Successful connection"
+
+# key1: ECDSA, key2: RSA; use key1 from slot 0
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: slot 0 used with key1" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt \
+             key_file2=data_files/server2.key crt_file2=data_files/server2.crt" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA256" \
+            0 \
+            -s "Async sign callback: using key slot 0," \
+            -s "Async resume (slot 0): call 0 more times." \
+            -s "Async resume (slot 0): sign done, status=0"
+
+# key1: ECDSA, key2: RSA; use key2 from slot 0
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: slot 0 used with key2" \
+            "$P_SRV \
+             async_operations=s async_private_delay2=1 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt \
+             key_file2=data_files/server2.key crt_file2=data_files/server2.crt" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-RSA-WITH-AES-128-CBC-SHA256" \
+            0 \
+            -s "Async sign callback: using key slot 0," \
+            -s "Async resume (slot 0): call 0 more times." \
+            -s "Async resume (slot 0): sign done, status=0"
+
+# key1: ECDSA, key2: RSA; use key2 from slot 1
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: slot 1 used with key2" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 async_private_delay2=1 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt \
+             key_file2=data_files/server2.key crt_file2=data_files/server2.crt" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-RSA-WITH-AES-128-CBC-SHA256" \
+            0 \
+            -s "Async sign callback: using key slot 1," \
+            -s "Async resume (slot 1): call 0 more times." \
+            -s "Async resume (slot 1): sign done, status=0"
+
+# key1: ECDSA, key2: RSA; use key2 directly
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: fall back to transparent key" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt \
+             key_file2=data_files/server2.key crt_file2=data_files/server2.crt " \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-RSA-WITH-AES-128-CBC-SHA256" \
+            0 \
+            -s "Async sign callback: no key matches this certificate."
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: sign, error in start" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 async_private_delay2=1 \
+             async_private_error=1" \
+            "$P_CLI" \
+            1 \
+            -s "Async sign callback: injected error" \
+            -S "Async resume" \
+            -S "Async cancel" \
+            -s "! mbedtls_ssl_handshake returned"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: sign, cancel after start" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 async_private_delay2=1 \
+             async_private_error=2" \
+            "$P_CLI" \
+            1 \
+            -s "Async sign callback: using key slot " \
+            -S "Async resume" \
+            -s "Async cancel"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: sign, error in resume" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 async_private_delay2=1 \
+             async_private_error=3" \
+            "$P_CLI" \
+            1 \
+            -s "Async sign callback: using key slot " \
+            -s "Async resume callback: sign done but injected error" \
+            -S "Async cancel" \
+            -s "! mbedtls_ssl_handshake returned"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: decrypt, error in start" \
+            "$P_SRV \
+             async_operations=d async_private_delay1=1 async_private_delay2=1 \
+             async_private_error=1" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            1 \
+            -s "Async decrypt callback: injected error" \
+            -S "Async resume" \
+            -S "Async cancel" \
+            -s "! mbedtls_ssl_handshake returned"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: decrypt, cancel after start" \
+            "$P_SRV \
+             async_operations=d async_private_delay1=1 async_private_delay2=1 \
+             async_private_error=2" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            1 \
+            -s "Async decrypt callback: using key slot " \
+            -S "Async resume" \
+            -s "Async cancel"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: decrypt, error in resume" \
+            "$P_SRV \
+             async_operations=d async_private_delay1=1 async_private_delay2=1 \
+             async_private_error=3" \
+            "$P_CLI force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            1 \
+            -s "Async decrypt callback: using key slot " \
+            -s "Async resume callback: decrypt done but injected error" \
+            -S "Async cancel" \
+            -s "! mbedtls_ssl_handshake returned"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: cancel after start then operate correctly" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 async_private_delay2=1 \
+             async_private_error=-2" \
+            "$P_CLI; [ \$? -eq 1 ] && $P_CLI" \
+            0 \
+            -s "Async cancel" \
+            -s "! mbedtls_ssl_handshake returned" \
+            -s "Async resume" \
+            -s "Successful connection"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: error in resume then operate correctly" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 async_private_delay2=1 \
+             async_private_error=-3" \
+            "$P_CLI; [ \$? -eq 1 ] && $P_CLI" \
+            0 \
+            -s "! mbedtls_ssl_handshake returned" \
+            -s "Async resume" \
+            -s "Successful connection"
+
+# key1: ECDSA, key2: RSA; use key1 through async, then key2 directly
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: cancel after start then fall back to transparent key" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 async_private_error=-2 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt \
+             key_file2=data_files/server2.key crt_file2=data_files/server2.crt" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA256;
+             [ \$? -eq 1 ] &&
+             $P_CLI force_ciphersuite=TLS-ECDHE-RSA-WITH-AES-128-CBC-SHA256" \
+            0 \
+            -s "Async sign callback: using key slot 0" \
+            -S "Async resume" \
+            -s "Async cancel" \
+            -s "! mbedtls_ssl_handshake returned" \
+            -s "Async sign callback: no key matches this certificate." \
+            -s "Successful connection"
+
+# key1: ECDSA, key2: RSA; use key1 through async, then key2 directly
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+run_test    "SSL async private: sign, error in resume then fall back to transparent key" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 async_private_error=-3 \
+             key_file=data_files/server5.key crt_file=data_files/server5.crt \
+             key_file2=data_files/server2.key crt_file2=data_files/server2.crt" \
+            "$P_CLI force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA256;
+             [ \$? -eq 1 ] &&
+             $P_CLI force_ciphersuite=TLS-ECDHE-RSA-WITH-AES-128-CBC-SHA256" \
+            0 \
+            -s "Async resume" \
+            -s "! mbedtls_ssl_handshake returned" \
+            -s "Async sign callback: no key matches this certificate." \
+            -s "Successful connection"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
+run_test    "SSL async private: renegotiation: client-initiated; sign" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 async_private_delay2=1 \
+             exchanges=2 renegotiation=1" \
+            "$P_CLI exchanges=2 renegotiation=1 renegotiate=1" \
+            0 \
+            -s "Async sign callback: using key slot " \
+            -s "Async resume (slot [0-9]): sign done, status=0"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
+run_test    "SSL async private: renegotiation: server-initiated; sign" \
+            "$P_SRV \
+             async_operations=s async_private_delay1=1 async_private_delay2=1 \
+             exchanges=2 renegotiation=1 renegotiate=1" \
+            "$P_CLI exchanges=2 renegotiation=1" \
+            0 \
+            -s "Async sign callback: using key slot " \
+            -s "Async resume (slot [0-9]): sign done, status=0"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
+run_test    "SSL async private: renegotiation: client-initiated; decrypt" \
+            "$P_SRV \
+             async_operations=d async_private_delay1=1 async_private_delay2=1 \
+             exchanges=2 renegotiation=1" \
+            "$P_CLI exchanges=2 renegotiation=1 renegotiate=1 \
+             force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            0 \
+            -s "Async decrypt callback: using key slot " \
+            -s "Async resume (slot [0-9]): decrypt done, status=0"
+
+requires_config_enabled MBEDTLS_SSL_ASYNC_PRIVATE
+requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
+run_test    "SSL async private: renegotiation: server-initiated; decrypt" \
+            "$P_SRV \
+             async_operations=d async_private_delay1=1 async_private_delay2=1 \
+             exchanges=2 renegotiation=1 renegotiate=1" \
+            "$P_CLI exchanges=2 renegotiation=1 \
+             force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
+            0 \
+            -s "Async decrypt callback: using key slot " \
+            -s "Async resume (slot [0-9]): decrypt done, status=0"
+
+# Tests for ECC extensions (rfc 4492)
+
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_CIPHER_MODE_CBC
+requires_config_enabled MBEDTLS_SHA256_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_RSA_ENABLED
+run_test    "Force a non ECC ciphersuite in the client side" \
+            "$P_SRV debug_level=3" \
+            "$P_CLI debug_level=3 force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA256" \
+            0 \
+            -C "client hello, adding supported_elliptic_curves extension" \
+            -C "client hello, adding supported_point_formats extension" \
+            -S "found supported elliptic curves extension" \
+            -S "found supported point formats extension"
+
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_CIPHER_MODE_CBC
+requires_config_enabled MBEDTLS_SHA256_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_RSA_ENABLED
+run_test    "Force a non ECC ciphersuite in the server side" \
+            "$P_SRV debug_level=3 force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA256" \
+            "$P_CLI debug_level=3" \
+            0 \
+            -C "found supported_point_formats extension" \
+            -S "server hello, supported_point_formats extension"
+
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_CIPHER_MODE_CBC
+requires_config_enabled MBEDTLS_SHA256_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+run_test    "Force an ECC ciphersuite in the client side" \
+            "$P_SRV debug_level=3" \
+            "$P_CLI debug_level=3 force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA256" \
+            0 \
+            -c "client hello, adding supported_elliptic_curves extension" \
+            -c "client hello, adding supported_point_formats extension" \
+            -s "found supported elliptic curves extension" \
+            -s "found supported point formats extension"
+
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_CIPHER_MODE_CBC
+requires_config_enabled MBEDTLS_SHA256_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+run_test    "Force an ECC ciphersuite in the server side" \
+            "$P_SRV debug_level=3 force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA256" \
+            "$P_CLI debug_level=3" \
+            0 \
+            -c "found supported_point_formats extension" \
+            -s "server hello, supported_point_formats extension"
+
 # Tests for DTLS HelloVerifyRequest
 
 run_test    "DTLS cookie: enabled" \
@@ -5190,6 +6200,993 @@ run_test    "DTLS reassembly: fragmentation, nbio (openssl server)" \
             -c "found fragmented DTLS handshake message" \
             -C "error"
 
+# Tests for sending fragmented handshake messages with DTLS
+#
+# Use client auth when we need the client to send large messages,
+# and use large cert chains on both sides too (the long chains we have all use
+# both RSA and ECDSA, but ideally we should have long chains with either).
+# Sizes reached (UDP payload):
+# - 2037B for server certificate
+# - 1542B for client certificate
+# - 1013B for newsessionticket
+# - all others below 512B
+# All those tests assume MAX_CONTENT_LEN is at least 2048
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
+requires_max_content_len 4096
+run_test    "DTLS fragmenting: none (for reference)" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=4096" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=4096" \
+            0 \
+            -S "found fragmented DTLS handshake message" \
+            -C "found fragmented DTLS handshake message" \
+            -C "error"
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: server only (max_frag_len)" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=1024" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=2048" \
+            0 \
+            -S "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# With the MFL extension, the server has no way of forcing
+# the client to not exceed a certain MTU; hence, the following
+# test can't be replicated with an MTU proxy such as the one
+# `client-initiated, server only (max_frag_len)` below.
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
+requires_max_content_len 4096
+run_test    "DTLS fragmenting: server only (more) (max_frag_len)" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=512" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=4096" \
+            0 \
+            -S "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: client-initiated, server only (max_frag_len)" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=none \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=2048" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=1024" \
+             0 \
+            -S "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# While not required by the standard defining the MFL extension
+# (according to which it only applies to records, not to datagrams),
+# Mbed TLS will never send datagrams larger than MFL + { Max record expansion },
+# as otherwise there wouldn't be any means to communicate MTU restrictions
+# to the peer.
+# The next test checks that no datagrams significantly larger than the
+# negotiated MFL are sent.
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: client-initiated, server only (max_frag_len), proxy MTU" \
+            -p "$P_PXY mtu=1110" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=none \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=2048" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=1024" \
+            0 \
+            -S "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: client-initiated, both (max_frag_len)" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=2048" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=1024" \
+            0 \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# While not required by the standard defining the MFL extension
+# (according to which it only applies to records, not to datagrams),
+# Mbed TLS will never send datagrams larger than MFL + { Max record expansion },
+# as otherwise there wouldn't be any means to communicate MTU restrictions
+# to the peer.
+# The next test checks that no datagrams significantly larger than the
+# negotiated MFL are sent.
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: client-initiated, both (max_frag_len), proxy MTU" \
+            -p "$P_PXY mtu=1110" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=2048" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=2500-60000 \
+             max_frag_len=1024" \
+            0 \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_max_content_len 4096
+run_test    "DTLS fragmenting: none (for reference) (MTU)" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=2500-60000 \
+             mtu=4096" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=2500-60000 \
+             mtu=4096" \
+            0 \
+            -S "found fragmented DTLS handshake message" \
+            -C "found fragmented DTLS handshake message" \
+            -C "error"
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_max_content_len 4096
+run_test    "DTLS fragmenting: client (MTU)" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=3500-60000 \
+             mtu=4096" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=3500-60000 \
+             mtu=1024" \
+            0 \
+            -s "found fragmented DTLS handshake message" \
+            -C "found fragmented DTLS handshake message" \
+            -C "error"
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: server (MTU)" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=2500-60000 \
+             mtu=512" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=2500-60000 \
+             mtu=2048" \
+            0 \
+            -S "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: both (MTU=1024)" \
+            -p "$P_PXY mtu=1024" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=2500-60000 \
+             mtu=1024" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=2500-60000 \
+             mtu=1024" \
+            0 \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# Forcing ciphersuite for this test to fit the MTU of 512 with full config.
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SHA256_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_GCM_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: both (MTU=512)" \
+            -p "$P_PXY mtu=512" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=2500-60000 \
+             mtu=512" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             hs_timeout=2500-60000 \
+             mtu=512" \
+            0 \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# Test for automatic MTU reduction on repeated resend.
+# Forcing ciphersuite for this test to fit the MTU of 508 with full config.
+# The ratio of max/min timeout should ideally equal 4 to accept two
+# retransmissions, but in some cases (like both the server and client using
+# fragmentation and auto-reduction) an extra retransmission might occur,
+# hence the ratio of 8.
+not_with_valgrind
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_GCM_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU: auto-reduction" \
+            -p "$P_PXY mtu=508" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=400-3200" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             hs_timeout=400-3200" \
+            0 \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# Forcing ciphersuite for this test to fit the MTU of 508 with full config.
+only_with_valgrind
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_GCM_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU: auto-reduction" \
+            -p "$P_PXY mtu=508" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=250-10000" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             hs_timeout=250-10000" \
+            0 \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# the proxy shouldn't drop or mess up anything, so we shouldn't need to resend
+# OTOH the client might resend if the server is to slow to reset after sending
+# a HelloVerifyRequest, so only check for no retransmission server-side
+not_with_valgrind # spurious autoreduction due to timeout
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU, simple handshake (MTU=1024)" \
+            -p "$P_PXY mtu=1024" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=10000-60000 \
+             mtu=1024" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=10000-60000 \
+             mtu=1024" \
+            0 \
+            -S "autoreduction" \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# Forcing ciphersuite for this test to fit the MTU of 512 with full config.
+# the proxy shouldn't drop or mess up anything, so we shouldn't need to resend
+# OTOH the client might resend if the server is to slow to reset after sending
+# a HelloVerifyRequest, so only check for no retransmission server-side
+not_with_valgrind # spurious autoreduction due to timeout
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_GCM_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU, simple handshake (MTU=512)" \
+            -p "$P_PXY mtu=512" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=10000-60000 \
+             mtu=512" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             hs_timeout=10000-60000 \
+             mtu=512" \
+            0 \
+            -S "autoreduction" \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+not_with_valgrind # spurious autoreduction due to timeout
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU, simple handshake, nbio (MTU=1024)" \
+            -p "$P_PXY mtu=1024" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=10000-60000 \
+             mtu=1024 nbio=2" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=10000-60000 \
+             mtu=1024 nbio=2" \
+            0 \
+            -S "autoreduction" \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# Forcing ciphersuite for this test to fit the MTU of 512 with full config.
+not_with_valgrind # spurious autoreduction due to timeout
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_GCM_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU, simple handshake, nbio (MTU=512)" \
+            -p "$P_PXY mtu=512" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=10000-60000 \
+             mtu=512 nbio=2" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             hs_timeout=10000-60000 \
+             mtu=512 nbio=2" \
+            0 \
+            -S "autoreduction" \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# Forcing ciphersuite for this test to fit the MTU of 1450 with full config.
+# This ensures things still work after session_reset().
+# It also exercises the "resumed handshake" flow.
+# Since we don't support reading fragmented ClientHello yet,
+# up the MTU to 1450 (larger than ClientHello with session ticket,
+# but still smaller than client's Certificate to ensure fragmentation).
+# An autoreduction on the client-side might happen if the server is
+# slow to reset, therefore omitting '-C "autoreduction"' below.
+# reco_delay avoids races where the client reconnects before the server has
+# resumed listening, which would result in a spurious autoreduction.
+not_with_valgrind # spurious autoreduction due to timeout
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_GCM_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU, resumed handshake" \
+            -p "$P_PXY mtu=1450" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=10000-60000 \
+             mtu=1450" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=10000-60000 \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             mtu=1450 reconnect=1 skip_close_notify=1 reco_delay=1" \
+            0 \
+            -S "autoreduction" \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# An autoreduction on the client-side might happen if the server is
+# slow to reset, therefore omitting '-C "autoreduction"' below.
+not_with_valgrind # spurious autoreduction due to timeout
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SHA256_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
+requires_config_enabled MBEDTLS_CHACHAPOLY_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU, ChachaPoly renego" \
+            -p "$P_PXY mtu=512" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             exchanges=2 renegotiation=1 \
+             hs_timeout=10000-60000 \
+             mtu=512" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             exchanges=2 renegotiation=1 renegotiate=1 \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             hs_timeout=10000-60000 \
+             mtu=512" \
+            0 \
+            -S "autoreduction" \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# An autoreduction on the client-side might happen if the server is
+# slow to reset, therefore omitting '-C "autoreduction"' below.
+not_with_valgrind # spurious autoreduction due to timeout
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SHA256_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_GCM_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU, AES-GCM renego" \
+            -p "$P_PXY mtu=512" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             exchanges=2 renegotiation=1 \
+             hs_timeout=10000-60000 \
+             mtu=512" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             exchanges=2 renegotiation=1 renegotiate=1 \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             hs_timeout=10000-60000 \
+             mtu=512" \
+            0 \
+            -S "autoreduction" \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# An autoreduction on the client-side might happen if the server is
+# slow to reset, therefore omitting '-C "autoreduction"' below.
+not_with_valgrind # spurious autoreduction due to timeout
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SHA256_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_CCM_C
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU, AES-CCM renego" \
+            -p "$P_PXY mtu=1024" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             exchanges=2 renegotiation=1 \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-CCM-8 \
+             hs_timeout=10000-60000 \
+             mtu=1024" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             exchanges=2 renegotiation=1 renegotiate=1 \
+             hs_timeout=10000-60000 \
+             mtu=1024" \
+            0 \
+            -S "autoreduction" \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# An autoreduction on the client-side might happen if the server is
+# slow to reset, therefore omitting '-C "autoreduction"' below.
+not_with_valgrind # spurious autoreduction due to timeout
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SHA256_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_CIPHER_MODE_CBC
+requires_config_enabled MBEDTLS_SSL_ENCRYPT_THEN_MAC
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU, AES-CBC EtM renego" \
+            -p "$P_PXY mtu=1024" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             exchanges=2 renegotiation=1 \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA256 \
+             hs_timeout=10000-60000 \
+             mtu=1024" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             exchanges=2 renegotiation=1 renegotiate=1 \
+             hs_timeout=10000-60000 \
+             mtu=1024" \
+            0 \
+            -S "autoreduction" \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# An autoreduction on the client-side might happen if the server is
+# slow to reset, therefore omitting '-C "autoreduction"' below.
+not_with_valgrind # spurious autoreduction due to timeout
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SHA256_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_CIPHER_MODE_CBC
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU, AES-CBC non-EtM renego" \
+            -p "$P_PXY mtu=1024" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             exchanges=2 renegotiation=1 \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA256 etm=0 \
+             hs_timeout=10000-60000 \
+             mtu=1024" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             exchanges=2 renegotiation=1 renegotiate=1 \
+             hs_timeout=10000-60000 \
+             mtu=1024" \
+            0 \
+            -S "autoreduction" \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# Forcing ciphersuite for this test to fit the MTU of 512 with full config.
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_GCM_C
+client_needs_more_time 2
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU + 3d" \
+            -p "$P_PXY mtu=512 drop=8 delay=8 duplicate=8" \
+            "$P_SRV dgram_packing=0 dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=250-10000 mtu=512" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             hs_timeout=250-10000 mtu=512" \
+            0 \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# Forcing ciphersuite for this test to fit the MTU of 512 with full config.
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+requires_config_enabled MBEDTLS_AES_C
+requires_config_enabled MBEDTLS_GCM_C
+client_needs_more_time 2
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: proxy MTU + 3d, nbio" \
+            -p "$P_PXY mtu=512 drop=8 delay=8 duplicate=8" \
+            "$P_SRV dtls=1 debug_level=2 auth_mode=required \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=250-10000 mtu=512 nbio=2" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             force_ciphersuite=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256 \
+             hs_timeout=250-10000 mtu=512 nbio=2" \
+            0 \
+            -s "found fragmented DTLS handshake message" \
+            -c "found fragmented DTLS handshake message" \
+            -C "error"
+
+# interop tests for DTLS fragmentating with reliable connection
+#
+# here and below we just want to test that the we fragment in a way that
+# pleases other implementations, so we don't need the peer to fragment
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_2
+requires_gnutls
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: gnutls server, DTLS 1.2" \
+            "$G_SRV -u" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             mtu=512 force_version=dtls1_2" \
+            0 \
+            -c "fragmenting handshake message" \
+            -C "error"
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_1
+requires_gnutls
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: gnutls server, DTLS 1.0" \
+            "$G_SRV -u" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             mtu=512 force_version=dtls1" \
+            0 \
+            -c "fragmenting handshake message" \
+            -C "error"
+
+# We use --insecure for the GnuTLS client because it expects
+# the hostname / IP it connects to to be the name used in the
+# certificate obtained from the server. Here, however, it
+# connects to 127.0.0.1 while our test certificates use 'localhost'
+# as the server name in the certificate. This will make the
+# certifiate validation fail, but passing --insecure makes
+# GnuTLS continue the connection nonetheless.
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_2
+requires_gnutls
+requires_not_i686
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: gnutls client, DTLS 1.2" \
+            "$P_SRV dtls=1 debug_level=2 \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             mtu=512 force_version=dtls1_2" \
+            "$G_CLI -u --insecure 127.0.0.1" \
+            0 \
+            -s "fragmenting handshake message"
+
+# See previous test for the reason to use --insecure
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_1
+requires_gnutls
+requires_not_i686
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: gnutls client, DTLS 1.0" \
+            "$P_SRV dtls=1 debug_level=2 \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             mtu=512 force_version=dtls1" \
+            "$G_CLI -u --insecure 127.0.0.1" \
+            0 \
+            -s "fragmenting handshake message"
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_2
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: openssl server, DTLS 1.2" \
+            "$O_SRV -dtls1_2 -verify 10" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             mtu=512 force_version=dtls1_2" \
+            0 \
+            -c "fragmenting handshake message" \
+            -C "error"
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_1
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: openssl server, DTLS 1.0" \
+            "$O_SRV -dtls1 -verify 10" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             mtu=512 force_version=dtls1" \
+            0 \
+            -c "fragmenting handshake message" \
+            -C "error"
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_2
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: openssl client, DTLS 1.2" \
+            "$P_SRV dtls=1 debug_level=2 \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             mtu=512 force_version=dtls1_2" \
+            "$O_CLI -dtls1_2" \
+            0 \
+            -s "fragmenting handshake message"
+
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_1
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: openssl client, DTLS 1.0" \
+            "$P_SRV dtls=1 debug_level=2 \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             mtu=512 force_version=dtls1" \
+            "$O_CLI -dtls1" \
+            0 \
+            -s "fragmenting handshake message"
+
+# interop tests for DTLS fragmentating with unreliable connection
+#
+# again we just want to test that the we fragment in a way that
+# pleases other implementations, so we don't need the peer to fragment
+requires_gnutls_next
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_2
+client_needs_more_time 4
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: 3d, gnutls server, DTLS 1.2" \
+            -p "$P_PXY drop=8 delay=8 duplicate=8" \
+            "$G_NEXT_SRV -u" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=250-60000 mtu=512 force_version=dtls1_2" \
+            0 \
+            -c "fragmenting handshake message" \
+            -C "error"
+
+requires_gnutls_next
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_1
+client_needs_more_time 4
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: 3d, gnutls server, DTLS 1.0" \
+            -p "$P_PXY drop=8 delay=8 duplicate=8" \
+            "$G_NEXT_SRV -u" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=250-60000 mtu=512 force_version=dtls1" \
+            0 \
+            -c "fragmenting handshake message" \
+            -C "error"
+
+requires_gnutls_next
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_2
+client_needs_more_time 4
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: 3d, gnutls client, DTLS 1.2" \
+            -p "$P_PXY drop=8 delay=8 duplicate=8" \
+            "$P_SRV dtls=1 debug_level=2 \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=250-60000 mtu=512 force_version=dtls1_2" \
+           "$G_NEXT_CLI -u --insecure 127.0.0.1" \
+            0 \
+            -s "fragmenting handshake message"
+
+requires_gnutls_next
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_1
+client_needs_more_time 4
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: 3d, gnutls client, DTLS 1.0" \
+            -p "$P_PXY drop=8 delay=8 duplicate=8" \
+            "$P_SRV dtls=1 debug_level=2 \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=250-60000 mtu=512 force_version=dtls1" \
+           "$G_NEXT_CLI -u --insecure 127.0.0.1" \
+            0 \
+            -s "fragmenting handshake message"
+
+## Interop test with OpenSSL might trigger a bug in recent versions (including
+## all versions installed on the CI machines), reported here:
+## Bug report: https://github.com/openssl/openssl/issues/6902
+## They should be re-enabled once a fixed version of OpenSSL is available
+## (this should happen in some 1.1.1_ release according to the ticket).
+skip_next_test
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_2
+client_needs_more_time 4
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: 3d, openssl server, DTLS 1.2" \
+            -p "$P_PXY drop=8 delay=8 duplicate=8" \
+            "$O_SRV -dtls1_2 -verify 10" \
+            "$P_CLI dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=250-60000 mtu=512 force_version=dtls1_2" \
+            0 \
+            -c "fragmenting handshake message" \
+            -C "error"
+
+skip_next_test
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_1
+client_needs_more_time 4
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: 3d, openssl server, DTLS 1.0" \
+            -p "$P_PXY drop=8 delay=8 duplicate=8" \
+            "$O_SRV -dtls1 -verify 10" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 \
+             crt_file=data_files/server8_int-ca2.crt \
+             key_file=data_files/server8.key \
+             hs_timeout=250-60000 mtu=512 force_version=dtls1" \
+            0 \
+            -c "fragmenting handshake message" \
+            -C "error"
+
+skip_next_test
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_2
+client_needs_more_time 4
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: 3d, openssl client, DTLS 1.2" \
+            -p "$P_PXY drop=8 delay=8 duplicate=8" \
+            "$P_SRV dtls=1 debug_level=2 \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=250-60000 mtu=512 force_version=dtls1_2" \
+            "$O_CLI -dtls1_2" \
+            0 \
+            -s "fragmenting handshake message"
+
+# -nbio is added to prevent s_client from blocking in case of duplicated
+# messages at the end of the handshake
+skip_next_test
+requires_config_enabled MBEDTLS_SSL_PROTO_DTLS
+requires_config_enabled MBEDTLS_RSA_C
+requires_config_enabled MBEDTLS_ECDSA_C
+requires_config_enabled MBEDTLS_SSL_PROTO_TLS1_1
+client_needs_more_time 4
+requires_max_content_len 2048
+run_test    "DTLS fragmenting: 3d, openssl client, DTLS 1.0" \
+            -p "$P_PXY drop=8 delay=8 duplicate=8" \
+            "$P_SRV dgram_packing=0 dtls=1 debug_level=2 \
+             crt_file=data_files/server7_int-ca.crt \
+             key_file=data_files/server7.key \
+             hs_timeout=250-60000 mtu=512 force_version=dtls1" \
+            "$O_CLI -nbio -dtls1" \
+            0 \
+            -s "fragmenting handshake message"
+
 # Tests for specific things with "unreliable" UDP connection
 
 not_with_valgrind # spurious resend due to timeout
@@ -5211,8 +7208,8 @@ run_test    "DTLS proxy: reference" \
 not_with_valgrind # spurious resend due to timeout
 run_test    "DTLS proxy: duplicate every packet" \
             -p "$P_PXY duplicate=1" \
-            "$P_SRV dtls=1 debug_level=2 hs_timeout=10000-20000" \
-            "$P_CLI dtls=1 debug_level=2 hs_timeout=10000-20000" \
+            "$P_SRV dtls=1 dgram_packing=0 debug_level=2 hs_timeout=10000-20000" \
+            "$P_CLI dtls=1 dgram_packing=0 debug_level=2 hs_timeout=10000-20000" \
             0 \
             -c "replayed record" \
             -s "replayed record" \
@@ -5224,8 +7221,8 @@ run_test    "DTLS proxy: duplicate every packet" \
 
 run_test    "DTLS proxy: duplicate every packet, server anti-replay off" \
             -p "$P_PXY duplicate=1" \
-            "$P_SRV dtls=1 debug_level=2 anti_replay=0" \
-            "$P_CLI dtls=1 debug_level=2" \
+            "$P_SRV dtls=1 dgram_packing=0 debug_level=2 anti_replay=0" \
+            "$P_CLI dtls=1 dgram_packing=0 debug_level=2" \
             0 \
             -c "replayed record" \
             -S "replayed record" \
@@ -5236,10 +7233,26 @@ run_test    "DTLS proxy: duplicate every packet, server anti-replay off" \
             -s "Extra-header:" \
             -c "HTTP/1.0 200 OK"
 
+run_test    "DTLS proxy: multiple records in same datagram" \
+            -p "$P_PXY pack=50" \
+            "$P_SRV dtls=1 dgram_packing=0 debug_level=2" \
+            "$P_CLI dtls=1 dgram_packing=0 debug_level=2" \
+            0 \
+            -c "next record in same datagram" \
+            -s "next record in same datagram"
+
+run_test    "DTLS proxy: multiple records in same datagram, duplicate every packet" \
+            -p "$P_PXY pack=50 duplicate=1" \
+            "$P_SRV dtls=1 dgram_packing=0 debug_level=2" \
+            "$P_CLI dtls=1 dgram_packing=0 debug_level=2" \
+            0 \
+            -c "next record in same datagram" \
+            -s "next record in same datagram"
+
 run_test    "DTLS proxy: inject invalid AD record, default badmac_limit" \
             -p "$P_PXY bad_ad=1" \
-            "$P_SRV dtls=1 debug_level=1" \
-            "$P_CLI dtls=1 debug_level=1 read_timeout=100" \
+            "$P_SRV dtls=1 dgram_packing=0 debug_level=1" \
+            "$P_CLI dtls=1 dgram_packing=0 debug_level=1 read_timeout=100" \
             0 \
             -c "discarding invalid record (mac)" \
             -s "discarding invalid record (mac)" \
@@ -5250,8 +7263,8 @@ run_test    "DTLS proxy: inject invalid AD record, default badmac_limit" \
 
 run_test    "DTLS proxy: inject invalid AD record, badmac_limit 1" \
             -p "$P_PXY bad_ad=1" \
-            "$P_SRV dtls=1 debug_level=1 badmac_limit=1" \
-            "$P_CLI dtls=1 debug_level=1 read_timeout=100" \
+            "$P_SRV dtls=1 dgram_packing=0 debug_level=1 badmac_limit=1" \
+            "$P_CLI dtls=1 dgram_packing=0 debug_level=1 read_timeout=100" \
             1 \
             -C "discarding invalid record (mac)" \
             -S "discarding invalid record (mac)" \
@@ -5262,8 +7275,8 @@ run_test    "DTLS proxy: inject invalid AD record, badmac_limit 1" \
 
 run_test    "DTLS proxy: inject invalid AD record, badmac_limit 2" \
             -p "$P_PXY bad_ad=1" \
-            "$P_SRV dtls=1 debug_level=1 badmac_limit=2" \
-            "$P_CLI dtls=1 debug_level=1 read_timeout=100" \
+            "$P_SRV dtls=1 dgram_packing=0 debug_level=1 badmac_limit=2" \
+            "$P_CLI dtls=1 dgram_packing=0 debug_level=1 read_timeout=100" \
             0 \
             -c "discarding invalid record (mac)" \
             -s "discarding invalid record (mac)" \
@@ -5274,8 +7287,8 @@ run_test    "DTLS proxy: inject invalid AD record, badmac_limit 2" \
 
 run_test    "DTLS proxy: inject invalid AD record, badmac_limit 2, exchanges 2"\
             -p "$P_PXY bad_ad=1" \
-            "$P_SRV dtls=1 debug_level=1 badmac_limit=2 exchanges=2" \
-            "$P_CLI dtls=1 debug_level=1 read_timeout=100 exchanges=2" \
+            "$P_SRV dtls=1 dgram_packing=0 debug_level=1 badmac_limit=2 exchanges=2" \
+            "$P_CLI dtls=1 dgram_packing=0 debug_level=1 read_timeout=100 exchanges=2" \
             1 \
             -c "discarding invalid record (mac)" \
             -s "discarding invalid record (mac)" \
@@ -5286,22 +7299,190 @@ run_test    "DTLS proxy: inject invalid AD record, badmac_limit 2, exchanges 2"\
 
 run_test    "DTLS proxy: delay ChangeCipherSpec" \
             -p "$P_PXY delay_ccs=1" \
-            "$P_SRV dtls=1 debug_level=1" \
-            "$P_CLI dtls=1 debug_level=1" \
+            "$P_SRV dtls=1 debug_level=1 dgram_packing=0" \
+            "$P_CLI dtls=1 debug_level=1 dgram_packing=0" \
             0 \
             -c "record from another epoch" \
             -s "record from another epoch" \
             -s "Extra-header:" \
             -c "HTTP/1.0 200 OK"
 
+# Tests for reordering support with DTLS
+
+run_test    "DTLS reordering: Buffer out-of-order handshake message on client" \
+            -p "$P_PXY delay_srv=ServerHello" \
+            "$P_SRV dgram_packing=0 cookies=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            0 \
+            -c "Buffering HS message" \
+            -c "Next handshake message has been buffered - load"\
+            -S "Buffering HS message" \
+            -S "Next handshake message has been buffered - load"\
+            -C "Injecting buffered CCS message" \
+            -C "Remember CCS message" \
+            -S "Injecting buffered CCS message" \
+            -S "Remember CCS message"
+
+run_test    "DTLS reordering: Buffer out-of-order handshake message fragment on client" \
+            -p "$P_PXY delay_srv=ServerHello" \
+            "$P_SRV mtu=512 dgram_packing=0 cookies=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            0 \
+            -c "Buffering HS message" \
+            -c "found fragmented DTLS handshake message"\
+            -c "Next handshake message 1 not or only partially bufffered" \
+            -c "Next handshake message has been buffered - load"\
+            -S "Buffering HS message" \
+            -S "Next handshake message has been buffered - load"\
+            -C "Injecting buffered CCS message" \
+            -C "Remember CCS message" \
+            -S "Injecting buffered CCS message" \
+            -S "Remember CCS message"
+
+# The client buffers the ServerKeyExchange before receiving the fragmented
+# Certificate message; at the time of writing, together these are aroudn 1200b
+# in size, so that the bound below ensures that the certificate can be reassembled
+# while keeping the ServerKeyExchange.
+requires_config_value_at_least "MBEDTLS_SSL_DTLS_MAX_BUFFERING" 1300
+run_test    "DTLS reordering: Buffer out-of-order hs msg before reassembling next" \
+            -p "$P_PXY delay_srv=Certificate delay_srv=Certificate" \
+            "$P_SRV mtu=512 dgram_packing=0 cookies=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            0 \
+            -c "Buffering HS message" \
+            -c "Next handshake message has been buffered - load"\
+            -C "attempt to make space by freeing buffered messages" \
+            -S "Buffering HS message" \
+            -S "Next handshake message has been buffered - load"\
+            -C "Injecting buffered CCS message" \
+            -C "Remember CCS message" \
+            -S "Injecting buffered CCS message" \
+            -S "Remember CCS message"
+
+# The size constraints ensure that the delayed certificate message can't
+# be reassembled while keeping the ServerKeyExchange message, but it can
+# when dropping it first.
+requires_config_value_at_least "MBEDTLS_SSL_DTLS_MAX_BUFFERING" 900
+requires_config_value_at_most "MBEDTLS_SSL_DTLS_MAX_BUFFERING" 1299
+run_test    "DTLS reordering: Buffer out-of-order hs msg before reassembling next, free buffered msg" \
+            -p "$P_PXY delay_srv=Certificate delay_srv=Certificate" \
+            "$P_SRV mtu=512 dgram_packing=0 cookies=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            0 \
+            -c "Buffering HS message" \
+            -c "attempt to make space by freeing buffered future messages" \
+            -c "Enough space available after freeing buffered HS messages" \
+            -S "Buffering HS message" \
+            -S "Next handshake message has been buffered - load"\
+            -C "Injecting buffered CCS message" \
+            -C "Remember CCS message" \
+            -S "Injecting buffered CCS message" \
+            -S "Remember CCS message"
+
+run_test    "DTLS reordering: Buffer out-of-order handshake message on server" \
+            -p "$P_PXY delay_cli=Certificate" \
+            "$P_SRV dgram_packing=0 auth_mode=required cookies=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            0 \
+            -C "Buffering HS message" \
+            -C "Next handshake message has been buffered - load"\
+            -s "Buffering HS message" \
+            -s "Next handshake message has been buffered - load" \
+            -C "Injecting buffered CCS message" \
+            -C "Remember CCS message" \
+            -S "Injecting buffered CCS message" \
+            -S "Remember CCS message"
+
+run_test    "DTLS reordering: Buffer out-of-order CCS message on client"\
+            -p "$P_PXY delay_srv=NewSessionTicket" \
+            "$P_SRV dgram_packing=0 cookies=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            0 \
+            -C "Buffering HS message" \
+            -C "Next handshake message has been buffered - load"\
+            -S "Buffering HS message" \
+            -S "Next handshake message has been buffered - load" \
+            -c "Injecting buffered CCS message" \
+            -c "Remember CCS message" \
+            -S "Injecting buffered CCS message" \
+            -S "Remember CCS message"
+
+run_test    "DTLS reordering: Buffer out-of-order CCS message on server"\
+            -p "$P_PXY delay_cli=ClientKeyExchange" \
+            "$P_SRV dgram_packing=0 cookies=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            0 \
+            -C "Buffering HS message" \
+            -C "Next handshake message has been buffered - load"\
+            -S "Buffering HS message" \
+            -S "Next handshake message has been buffered - load" \
+            -C "Injecting buffered CCS message" \
+            -C "Remember CCS message" \
+            -s "Injecting buffered CCS message" \
+            -s "Remember CCS message"
+
+run_test    "DTLS reordering: Buffer encrypted Finished message" \
+            -p "$P_PXY delay_ccs=1" \
+            "$P_SRV dgram_packing=0 cookies=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 \
+            hs_timeout=2500-60000" \
+            0 \
+            -s "Buffer record from epoch 1" \
+            -s "Found buffered record from current epoch - load" \
+            -c "Buffer record from epoch 1" \
+            -c "Found buffered record from current epoch - load"
+
+# In this test, both the fragmented NewSessionTicket and the ChangeCipherSpec
+# from the server are delayed, so that the encrypted Finished message
+# is received and buffered. When the fragmented NewSessionTicket comes
+# in afterwards, the encrypted Finished message must be freed in order
+# to make space for the NewSessionTicket to be reassembled.
+# This works only in very particular circumstances:
+# - MBEDTLS_SSL_DTLS_MAX_BUFFERING must be large enough to allow buffering
+#   of the NewSessionTicket, but small enough to also allow buffering of
+#   the encrypted Finished message.
+# - The MTU setting on the server must be so small that the NewSessionTicket
+#   needs to be fragmented.
+# - All messages sent by the server must be small enough to be either sent
+#   without fragmentation or be reassembled within the bounds of
+#   MBEDTLS_SSL_DTLS_MAX_BUFFERING. Achieve this by testing with a PSK-based
+#   handshake, omitting CRTs.
+requires_config_value_at_least "MBEDTLS_SSL_DTLS_MAX_BUFFERING" 240
+requires_config_value_at_most "MBEDTLS_SSL_DTLS_MAX_BUFFERING" 280
+run_test    "DTLS reordering: Buffer encrypted Finished message, drop for fragmented NewSessionTicket" \
+            -p "$P_PXY delay_srv=NewSessionTicket delay_srv=NewSessionTicket delay_ccs=1" \
+            "$P_SRV mtu=190 dgram_packing=0 psk=abc123 psk_identity=foo cookies=0 dtls=1 debug_level=2" \
+            "$P_CLI dgram_packing=0 dtls=1 debug_level=2 force_ciphersuite=TLS-PSK-WITH-AES-128-CCM-8 psk=abc123 psk_identity=foo" \
+            0 \
+            -s "Buffer record from epoch 1" \
+            -s "Found buffered record from current epoch - load" \
+            -c "Buffer record from epoch 1" \
+            -C "Found buffered record from current epoch - load" \
+            -c "Enough space available after freeing future epoch record"
+
 # Tests for "randomly unreliable connection": try a variety of flows and peers
 
 client_needs_more_time 2
 run_test    "DTLS proxy: 3d (drop, delay, duplicate), \"short\" PSK handshake" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 tickets=0 auth_mode=none \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 auth_mode=none \
              psk=abc123" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 tickets=0 psk=abc123 \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 psk=abc123 \
              force_ciphersuite=TLS-PSK-WITH-AES-128-CCM-8" \
             0 \
             -s "Extra-header:" \
@@ -5310,8 +7491,8 @@ run_test    "DTLS proxy: 3d (drop, delay, duplicate), \"short\" PSK handshake" \
 client_needs_more_time 2
 run_test    "DTLS proxy: 3d, \"short\" RSA handshake" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 tickets=0 auth_mode=none" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 tickets=0 \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 auth_mode=none" \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 \
              force_ciphersuite=TLS-RSA-WITH-AES-128-CBC-SHA" \
             0 \
             -s "Extra-header:" \
@@ -5320,8 +7501,8 @@ run_test    "DTLS proxy: 3d, \"short\" RSA handshake" \
 client_needs_more_time 2
 run_test    "DTLS proxy: 3d, \"short\" (no ticket, no cli_auth) FS handshake" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 tickets=0 auth_mode=none" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 tickets=0" \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 auth_mode=none" \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0" \
             0 \
             -s "Extra-header:" \
             -c "HTTP/1.0 200 OK"
@@ -5329,8 +7510,8 @@ run_test    "DTLS proxy: 3d, \"short\" (no ticket, no cli_auth) FS handshake" \
 client_needs_more_time 2
 run_test    "DTLS proxy: 3d, FS, client auth" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 tickets=0 auth_mode=required" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 tickets=0" \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 auth_mode=required" \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0" \
             0 \
             -s "Extra-header:" \
             -c "HTTP/1.0 200 OK"
@@ -5338,8 +7519,8 @@ run_test    "DTLS proxy: 3d, FS, client auth" \
 client_needs_more_time 2
 run_test    "DTLS proxy: 3d, FS, ticket" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 tickets=1 auth_mode=none" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 tickets=1" \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=1 auth_mode=none" \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=1" \
             0 \
             -s "Extra-header:" \
             -c "HTTP/1.0 200 OK"
@@ -5347,8 +7528,8 @@ run_test    "DTLS proxy: 3d, FS, ticket" \
 client_needs_more_time 2
 run_test    "DTLS proxy: 3d, max handshake (FS, ticket + client auth)" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 tickets=1 auth_mode=required" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 tickets=1" \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=1 auth_mode=required" \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=1" \
             0 \
             -s "Extra-header:" \
             -c "HTTP/1.0 200 OK"
@@ -5356,9 +7537,9 @@ run_test    "DTLS proxy: 3d, max handshake (FS, ticket + client auth)" \
 client_needs_more_time 2
 run_test    "DTLS proxy: 3d, max handshake, nbio" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 nbio=2 tickets=1 \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 nbio=2 tickets=1 \
              auth_mode=required" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 nbio=2 tickets=1" \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 nbio=2 tickets=1" \
             0 \
             -s "Extra-header:" \
             -c "HTTP/1.0 200 OK"
@@ -5366,9 +7547,9 @@ run_test    "DTLS proxy: 3d, max handshake, nbio" \
 client_needs_more_time 4
 run_test    "DTLS proxy: 3d, min handshake, resumption" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 tickets=0 auth_mode=none \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 auth_mode=none \
              psk=abc123 debug_level=3" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 tickets=0 psk=abc123 \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 psk=abc123 \
              debug_level=3 reconnect=1 skip_close_notify=1 read_timeout=1000 max_resend=10 \
              force_ciphersuite=TLS-PSK-WITH-AES-128-CCM-8" \
             0 \
@@ -5380,9 +7561,9 @@ run_test    "DTLS proxy: 3d, min handshake, resumption" \
 client_needs_more_time 4
 run_test    "DTLS proxy: 3d, min handshake, resumption, nbio" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 tickets=0 auth_mode=none \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 auth_mode=none \
              psk=abc123 debug_level=3 nbio=2" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 tickets=0 psk=abc123 \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 psk=abc123 \
              debug_level=3 reconnect=1 skip_close_notify=1 read_timeout=1000 max_resend=10 \
              force_ciphersuite=TLS-PSK-WITH-AES-128-CCM-8 nbio=2" \
             0 \
@@ -5395,9 +7576,9 @@ client_needs_more_time 4
 requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
 run_test    "DTLS proxy: 3d, min handshake, client-initiated renego" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 tickets=0 auth_mode=none \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 auth_mode=none \
              psk=abc123 renegotiation=1 debug_level=2" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 tickets=0 psk=abc123 \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 psk=abc123 \
              renegotiate=1 debug_level=2 \
              force_ciphersuite=TLS-PSK-WITH-AES-128-CCM-8" \
             0 \
@@ -5410,9 +7591,9 @@ client_needs_more_time 4
 requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
 run_test    "DTLS proxy: 3d, min handshake, client-initiated renego, nbio" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 tickets=0 auth_mode=none \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 auth_mode=none \
              psk=abc123 renegotiation=1 debug_level=2" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 tickets=0 psk=abc123 \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 psk=abc123 \
              renegotiate=1 debug_level=2 \
              force_ciphersuite=TLS-PSK-WITH-AES-128-CCM-8" \
             0 \
@@ -5425,10 +7606,10 @@ client_needs_more_time 4
 requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
 run_test    "DTLS proxy: 3d, min handshake, server-initiated renego" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 tickets=0 auth_mode=none \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 auth_mode=none \
              psk=abc123 renegotiate=1 renegotiation=1 exchanges=4 \
              debug_level=2" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 tickets=0 psk=abc123 \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 psk=abc123 \
              renegotiation=1 exchanges=4 debug_level=2 \
              force_ciphersuite=TLS-PSK-WITH-AES-128-CCM-8" \
             0 \
@@ -5441,10 +7622,10 @@ client_needs_more_time 4
 requires_config_enabled MBEDTLS_SSL_RENEGOTIATION
 run_test    "DTLS proxy: 3d, min handshake, server-initiated renego, nbio" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$P_SRV dtls=1 hs_timeout=500-10000 tickets=0 auth_mode=none \
+            "$P_SRV dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 auth_mode=none \
              psk=abc123 renegotiate=1 renegotiation=1 exchanges=4 \
              debug_level=2 nbio=2" \
-            "$P_CLI dtls=1 hs_timeout=500-10000 tickets=0 psk=abc123 \
+            "$P_CLI dtls=1 dgram_packing=0 hs_timeout=500-10000 tickets=0 psk=abc123 \
              renegotiation=1 exchanges=4 debug_level=2 nbio=2 \
              force_ciphersuite=TLS-PSK-WITH-AES-128-CCM-8" \
             0 \
@@ -5453,30 +7634,38 @@ run_test    "DTLS proxy: 3d, min handshake, server-initiated renego, nbio" \
             -s "Extra-header:" \
             -c "HTTP/1.0 200 OK"
 
+## Interop tests with OpenSSL might trigger a bug in recent versions (including
+## all versions installed on the CI machines), reported here:
+## Bug report: https://github.com/openssl/openssl/issues/6902
+## They should be re-enabled once a fixed version of OpenSSL is available
+## (this should happen in some 1.1.1_ release according to the ticket).
+skip_next_test
 client_needs_more_time 6
 not_with_valgrind # risk of non-mbedtls peer timing out
 run_test    "DTLS proxy: 3d, openssl server" \
             -p "$P_PXY drop=5 delay=5 duplicate=5 protect_hvr=1" \
             "$O_SRV -dtls1 -mtu 2048" \
-            "$P_CLI dtls=1 hs_timeout=500-60000 tickets=0" \
+            "$P_CLI dgram_packing=0 dtls=1 hs_timeout=500-60000 tickets=0" \
             0 \
             -c "HTTP/1.0 200 OK"
 
+skip_next_test # see above
 client_needs_more_time 8
 not_with_valgrind # risk of non-mbedtls peer timing out
 run_test    "DTLS proxy: 3d, openssl server, fragmentation" \
             -p "$P_PXY drop=5 delay=5 duplicate=5 protect_hvr=1" \
             "$O_SRV -dtls1 -mtu 768" \
-            "$P_CLI dtls=1 hs_timeout=500-60000 tickets=0" \
+            "$P_CLI dgram_packing=0 dtls=1 hs_timeout=500-60000 tickets=0" \
             0 \
             -c "HTTP/1.0 200 OK"
 
+skip_next_test # see above
 client_needs_more_time 8
 not_with_valgrind # risk of non-mbedtls peer timing out
 run_test    "DTLS proxy: 3d, openssl server, fragmentation, nbio" \
             -p "$P_PXY drop=5 delay=5 duplicate=5 protect_hvr=1" \
             "$O_SRV -dtls1 -mtu 768" \
-            "$P_CLI dtls=1 hs_timeout=500-60000 nbio=2 tickets=0" \
+            "$P_CLI dgram_packing=0 dtls=1 hs_timeout=500-60000 nbio=2 tickets=0" \
             0 \
             -c "HTTP/1.0 200 OK"
 
@@ -5486,29 +7675,29 @@ not_with_valgrind # risk of non-mbedtls peer timing out
 run_test    "DTLS proxy: 3d, gnutls server" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
             "$G_SRV -u --mtu 2048 -a" \
-            "$P_CLI dtls=1 hs_timeout=500-60000" \
+            "$P_CLI dgram_packing=0 dtls=1 hs_timeout=500-60000" \
             0 \
             -s "Extra-header:" \
             -c "Extra-header:"
 
-requires_gnutls
+requires_gnutls_next
 client_needs_more_time 8
 not_with_valgrind # risk of non-mbedtls peer timing out
 run_test    "DTLS proxy: 3d, gnutls server, fragmentation" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$G_SRV -u --mtu 512" \
-            "$P_CLI dtls=1 hs_timeout=500-60000" \
+            "$G_NEXT_SRV -u --mtu 512" \
+            "$P_CLI dgram_packing=0 dtls=1 hs_timeout=500-60000" \
             0 \
             -s "Extra-header:" \
             -c "Extra-header:"
 
-requires_gnutls
+requires_gnutls_next
 client_needs_more_time 8
 not_with_valgrind # risk of non-mbedtls peer timing out
 run_test    "DTLS proxy: 3d, gnutls server, fragmentation, nbio" \
             -p "$P_PXY drop=5 delay=5 duplicate=5" \
-            "$G_SRV -u --mtu 512" \
-            "$P_CLI dtls=1 hs_timeout=500-60000 nbio=2" \
+            "$G_NEXT_SRV -u --mtu 512" \
+            "$P_CLI dgram_packing=0 dtls=1 hs_timeout=500-60000 nbio=2" \
             0 \
             -s "Extra-header:" \
             -c "Extra-header:"

@@ -56,8 +56,10 @@
 #else
 #include <stdio.h>
 #include <stdlib.h>
-#define mbedtls_printf printf
-#define mbedtls_exit   exit
+#define mbedtls_printf          printf
+#define mbedtls_exit            exit
+#define MBEDTLS_EXIT_SUCCESS    EXIT_SUCCESS
+#define MBEDTLS_EXIT_FAILURE    EXIT_FAILURE
 #endif
 
 /*
@@ -188,6 +190,7 @@ enum exit_codes
     ssl_handshake_failed,
     ssl_write_failed,
 };
+
 
 int main( void )
 {

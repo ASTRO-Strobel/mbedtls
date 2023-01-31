@@ -19,7 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\programs\<PATHNAME>.c" />
+    <SOURCES>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="mbedTLS.vcxproj">

@@ -76,6 +76,8 @@ int main( void )
     mbedtls_exit( 0 );
 }
 #else
+
+
 static int generic_wrapper( const mbedtls_md_info_t *md_info, char *filename, unsigned char *sum )
 {
     int ret = mbedtls_md_file( md_info, filename, sum );

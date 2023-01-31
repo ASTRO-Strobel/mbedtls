@@ -58,7 +58,9 @@
 #define mbedtls_printf     printf
 #define mbedtls_fprintf    fprintf
 #define mbedtls_time_t     time_t
-#define mbedtls_exit       exit
+#define mbedtls_exit            exit
+#define MBEDTLS_EXIT_SUCCESS    EXIT_SUCCESS
+#define MBEDTLS_EXIT_FAILURE    EXIT_FAILURE
 #endif
 
 /* Uncomment out the following line to default to IPv4 and disable IPv6 */
@@ -112,8 +114,9 @@ int main( void )
 #include "mbedtls/ssl_cache.h"
 #endif
 
-#define READ_TIMEOUT_MS 10000   /* 5 seconds */
+#define READ_TIMEOUT_MS 10000   /* 10 seconds */
 #define DEBUG_LEVEL 0
+
 
 static void my_debug( void *ctx, int level,
                       const char *file, int line,
@@ -247,6 +250,7 @@ int main( void )
 
     mbedtls_ssl_conf_rng( &conf, mbedtls_ctr_drbg_random, &ctr_drbg );
     mbedtls_ssl_conf_dbg( &conf, my_debug, stdout );
+    mbedtls_ssl_conf_read_timeout( &conf, READ_TIMEOUT_MS );
 
 #if defined(MBEDTLS_SSL_CACHE_C)
     mbedtls_ssl_conf_session_cache( &conf, &cache,
