@@ -2155,9 +2155,7 @@
  *
  * Uncomment this to allow your own alternate threading implementation.
  */
-#ifdef __ECOS
 #define MBEDTLS_THREADING_ALT
-#endif
 
 /**
  * \def MBEDTLS_THREADING_PTHREAD
@@ -3505,9 +3503,7 @@
  *
  * Enable this layer to allow use of mutexes within mbed TLS
  */
-#ifdef __ECOS
 #define MBEDTLS_THREADING_C
-#endif
 
 /**
  * \def MBEDTLS_TIMING_C
