@@ -67,8 +67,8 @@
 #define CHARS_TO_LIMBS(i) ((i) / ciL + ((i) % ciL != 0))
 
 // mutex for the 64-bit multiplier, which is located in the FPGA
-#include <mbedtls/threading.h>
-mbedtls_threading_mutex_t mutex_mpi_mul;
+#include <cyg/kernel/kapi.h>
+cyg_mutex_t mutex_mpi_mul;
 bool mutex_mpi_mul_initialized = false;
 
 /* Implementation that should never be optimized out by the compiler */
@@ -86,7 +86,7 @@ void mbedtls_mpi_init(mbedtls_mpi *X)
 
     // initialize the global mutex for the 64 bit multiplier once
     if (!mutex_mpi_mul_initialized) {
-    	mbedtls_mutex_init(&mutex_mpi_mul);
+    	cyg_mutex_init(&mutex_mpi_mul);
     	mutex_mpi_mul_initialized = true;
     }
 
@@ -1537,11 +1537,12 @@ int mbedtls_mpi_mul_mpi(mbedtls_mpi *X, const mbedtls_mpi *A, const mbedtls_mpi 
     MBEDTLS_MPI_CHK( mbedtls_mpi_grow( X, i + j ) );
     MBEDTLS_MPI_CHK( mbedtls_mpi_lset( X, 0 ) );
 
-    mbedtls_mutex_lock(&mutex_mpi_mul);
-    for (; j > 0; j--) {
-        mpi_mul_hlp(i, A->p, X->p + j - 1, B->p[j - 1]);
+    if (cyg_mutex_lock(&mutex_mpi_mul)) {
+		for (; j > 0; j--) {
+			mpi_mul_hlp(i, A->p, X->p + j - 1, B->p[j - 1]);
+		}
+		cyg_mutex_unlock(&mutex_mpi_mul);
     }
-    mbedtls_mutex_unlock(&mutex_mpi_mul);
 
     /* If the result is 0, we don't shortcut the operation, which reduces
      * but does not eliminate side channels leaking the zero-ness. We do
@@ -1989,20 +1990,21 @@ static void mpi_montmul(mbedtls_mpi *A,
     n = N->n;
     m = (B->n < n) ? B->n : n;
 
-    mbedtls_mutex_lock(&mutex_mpi_mul);
-    for (i = 0; i < n; i++) {
-        /*
-         * T = (T + u0*B + u1*N) / 2^biL
-         */
-        u0 = A->p[i];
-        u1 = (d[0] + u0 * B->p[0]) * mm;
+    if (cyg_mutex_lock(&mutex_mpi_mul)) {
+		for (i = 0; i < n; i++) {
+			/*
+			 * T = (T + u0*B + u1*N) / 2^biL
+			 */
+			u0 = A->p[i];
+			u1 = (d[0] + u0 * B->p[0]) * mm;
 
-        mpi_mul_hlp(m, B->p, d, u0);
-        mpi_mul_hlp(n, N->p, d, u1);
+			mpi_mul_hlp(m, B->p, d, u0);
+			mpi_mul_hlp(n, N->p, d, u1);
 
-        *d++ = u0; d[n + 1] = 0;
+			*d++ = u0; d[n + 1] = 0;
+		}
+		cyg_mutex_unlock(&mutex_mpi_mul);
     }
-    mbedtls_mutex_unlock(&mutex_mpi_mul);
 
     /* At this point, d is either the desired result or the desired result
      * plus N. We now potentially subtract N, avoiding leaking whether the
