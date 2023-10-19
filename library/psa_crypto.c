@@ -47,7 +47,6 @@
 
 #include "psa_crypto_random_impl.h"
 
-#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include "mbedtls/platform.h"
@@ -1473,6 +1472,7 @@ psa_status_t psa_export_public_key(mbedtls_svc_key_id_t key,
 {
     psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
     psa_status_t unlock_status = PSA_ERROR_CORRUPTION_DETECTED;
+    psa_key_attributes_t attributes;
     psa_key_slot_t *slot;
 
     /* Reject a zero-length output buffer now, since this can never be a
@@ -1499,7 +1499,7 @@ psa_status_t psa_export_public_key(mbedtls_svc_key_id_t key,
         goto exit;
     }
 
-    psa_key_attributes_t attributes = {
+    attributes = (psa_key_attributes_t) {
         .core = slot->attr
     };
     status = psa_driver_wrapper_export_public_key(
@@ -1512,14 +1512,12 @@ exit:
     return (status == PSA_SUCCESS) ? unlock_status : status;
 }
 
-#if defined(static_assert)
-static_assert((MBEDTLS_PSA_KA_MASK_EXTERNAL_ONLY & MBEDTLS_PSA_KA_MASK_DUAL_USE) == 0,
-              "One or more key attribute flag is listed as both external-only and dual-use");
-static_assert((PSA_KA_MASK_INTERNAL_ONLY & MBEDTLS_PSA_KA_MASK_DUAL_USE) == 0,
-              "One or more key attribute flag is listed as both internal-only and dual-use");
-static_assert((PSA_KA_MASK_INTERNAL_ONLY & MBEDTLS_PSA_KA_MASK_EXTERNAL_ONLY) == 0,
-              "One or more key attribute flag is listed as both internal-only and external-only");
-#endif
+MBEDTLS_STATIC_ASSERT((MBEDTLS_PSA_KA_MASK_EXTERNAL_ONLY & MBEDTLS_PSA_KA_MASK_DUAL_USE) == 0,
+                      "One or more key attribute flag is listed as both external-only and dual-use")
+MBEDTLS_STATIC_ASSERT((PSA_KA_MASK_INTERNAL_ONLY & MBEDTLS_PSA_KA_MASK_DUAL_USE) == 0,
+                      "One or more key attribute flag is listed as both internal-only and dual-use")
+MBEDTLS_STATIC_ASSERT((PSA_KA_MASK_INTERNAL_ONLY & MBEDTLS_PSA_KA_MASK_EXTERNAL_ONLY) == 0,
+                      "One or more key attribute flag is listed as both internal-only and external-only")
 
 /** Validate that a key policy is internally well-formed.
  *
@@ -1755,12 +1753,12 @@ static psa_status_t psa_start_key_creation(
  *
  * \retval #PSA_SUCCESS
  *         The key was successfully created.
- * \retval #PSA_ERROR_INSUFFICIENT_MEMORY
- * \retval #PSA_ERROR_INSUFFICIENT_STORAGE
- * \retval #PSA_ERROR_ALREADY_EXISTS
- * \retval #PSA_ERROR_DATA_INVALID
- * \retval #PSA_ERROR_DATA_CORRUPT
- * \retval #PSA_ERROR_STORAGE_FAILURE
+ * \retval #PSA_ERROR_INSUFFICIENT_MEMORY \emptydescription
+ * \retval #PSA_ERROR_INSUFFICIENT_STORAGE \emptydescription
+ * \retval #PSA_ERROR_ALREADY_EXISTS \emptydescription
+ * \retval #PSA_ERROR_DATA_INVALID \emptydescription
+ * \retval #PSA_ERROR_DATA_CORRUPT \emptydescription
+ * \retval #PSA_ERROR_STORAGE_FAILURE \emptydescription
  *
  * \return If this function fails, the key slot is an invalid state.
  *         You must call psa_fail_key_creation() to wipe and free the slot.
@@ -1782,11 +1780,10 @@ static psa_status_t psa_finish_key_creation(
             psa_key_slot_number_t slot_number =
                 psa_key_slot_get_slot_number(slot);
 
-#if defined(static_assert)
-            static_assert(sizeof(slot_number) ==
-                          sizeof(data.slot_number),
-                          "Slot number size does not match psa_se_key_data_storage_t");
-#endif
+            MBEDTLS_STATIC_ASSERT(sizeof(slot_number) ==
+                                  sizeof(data.slot_number),
+                                  "Slot number size does not match psa_se_key_data_storage_t");
+
             memcpy(&data.slot_number, &slot_number, sizeof(slot_number));
             status = psa_save_persistent_key(&slot->attr,
                                              (uint8_t *) &data,
@@ -2410,6 +2407,7 @@ static psa_status_t psa_mac_setup(psa_mac_operation_t *operation,
 {
     psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
     psa_status_t unlock_status = PSA_ERROR_CORRUPTION_DETECTED;
+    psa_key_attributes_t attributes;
     psa_key_slot_t *slot = NULL;
 
     /* A context must be freshly initialized before it can be set up. */
@@ -2427,7 +2425,7 @@ static psa_status_t psa_mac_setup(psa_mac_operation_t *operation,
         goto exit;
     }
 
-    psa_key_attributes_t attributes = {
+    attributes = (psa_key_attributes_t) {
         .core = slot->attr
     };
 
@@ -2598,6 +2596,7 @@ static psa_status_t psa_mac_compute_internal(mbedtls_svc_key_id_t key,
 {
     psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
     psa_status_t unlock_status = PSA_ERROR_CORRUPTION_DETECTED;
+    psa_key_attributes_t attributes;
     psa_key_slot_t *slot;
     uint8_t operation_mac_size = 0;
 
@@ -2610,7 +2609,7 @@ static psa_status_t psa_mac_compute_internal(mbedtls_svc_key_id_t key,
         goto exit;
     }
 
-    psa_key_attributes_t attributes = {
+    attributes = (psa_key_attributes_t) {
         .core = slot->attr
     };
 
@@ -2736,6 +2735,7 @@ static psa_status_t psa_sign_internal(mbedtls_svc_key_id_t key,
 {
     psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
     psa_status_t unlock_status = PSA_ERROR_CORRUPTION_DETECTED;
+    psa_key_attributes_t attributes;
     psa_key_slot_t *slot;
 
     *signature_length = 0;
@@ -2768,7 +2768,7 @@ static psa_status_t psa_sign_internal(mbedtls_svc_key_id_t key,
         goto exit;
     }
 
-    psa_key_attributes_t attributes = {
+    attributes = (psa_key_attributes_t)  {
         .core = slot->attr
     };
 
@@ -3307,6 +3307,7 @@ static psa_status_t psa_cipher_setup(psa_cipher_operation_t *operation,
 {
     psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
     psa_status_t unlock_status = PSA_ERROR_CORRUPTION_DETECTED;
+    psa_key_attributes_t attributes;
     psa_key_slot_t *slot = NULL;
     psa_key_usage_t usage = (cipher_operation == MBEDTLS_ENCRYPT ?
                              PSA_KEY_USAGE_ENCRYPT :
@@ -3342,7 +3343,7 @@ static psa_status_t psa_cipher_setup(psa_cipher_operation_t *operation,
     }
     operation->default_iv_length = PSA_CIPHER_IV_LENGTH(slot->attr.type, alg);
 
-    psa_key_attributes_t attributes = {
+    attributes = (psa_key_attributes_t) {
         .core = slot->attr
     };
 
@@ -3392,7 +3393,7 @@ psa_status_t psa_cipher_generate_iv(psa_cipher_operation_t *operation,
 {
     psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
     uint8_t local_iv[PSA_CIPHER_IV_MAX_SIZE];
-    size_t default_iv_length;
+    size_t default_iv_length = 0;
 
     if (operation->id == 0) {
         status = PSA_ERROR_BAD_STATE;
@@ -3565,6 +3566,7 @@ psa_status_t psa_cipher_encrypt(mbedtls_svc_key_id_t key,
 {
     psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
     psa_status_t unlock_status = PSA_ERROR_CORRUPTION_DETECTED;
+    psa_key_attributes_t attributes;
     psa_key_slot_t *slot = NULL;
     uint8_t local_iv[PSA_CIPHER_IV_MAX_SIZE];
     size_t default_iv_length = 0;
@@ -3581,7 +3583,7 @@ psa_status_t psa_cipher_encrypt(mbedtls_svc_key_id_t key,
         goto exit;
     }
 
-    psa_key_attributes_t attributes = {
+    attributes = (psa_key_attributes_t) {
         .core = slot->attr
     };
 
@@ -3637,6 +3639,7 @@ psa_status_t psa_cipher_decrypt(mbedtls_svc_key_id_t key,
 {
     psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
     psa_status_t unlock_status = PSA_ERROR_CORRUPTION_DETECTED;
+    psa_key_attributes_t attributes;
     psa_key_slot_t *slot = NULL;
 
     if (!PSA_ALG_IS_CIPHER(alg)) {
@@ -3651,7 +3654,7 @@ psa_status_t psa_cipher_decrypt(mbedtls_svc_key_id_t key,
         goto exit;
     }
 
-    psa_key_attributes_t attributes = {
+    attributes = (psa_key_attributes_t) {
         .core = slot->attr
     };
 
@@ -4255,6 +4258,7 @@ static psa_status_t psa_generate_derived_key_internal(
     uint8_t *data = NULL;
     size_t bytes = PSA_BITS_TO_BYTES(bits);
     psa_status_t status;
+    psa_key_attributes_t attributes;
 
     if (!key_type_is_raw_bytes(slot->attr.type)) {
         return PSA_ERROR_INVALID_ARGUMENT;
@@ -4283,7 +4287,7 @@ static psa_status_t psa_generate_derived_key_internal(
     }
 
     slot->attr.bits = (psa_key_bits_t) bits;
-    psa_key_attributes_t attributes = {
+    attributes = (psa_key_attributes_t) {
         .core = slot->attr
     };
 
@@ -4895,14 +4899,16 @@ static psa_status_t psa_key_agreement_raw_internal(psa_algorithm_t alg,
                                                    size_t shared_secret_size,
                                                    size_t *shared_secret_length)
 {
+    mbedtls_ecp_keypair *ecp = NULL;
+    psa_status_t status;
+
     switch (alg) {
 #if defined(MBEDTLS_PSA_BUILTIN_ALG_ECDH)
         case PSA_ALG_ECDH:
             if (!PSA_KEY_TYPE_IS_ECC_KEY_PAIR(private_key->attr.type)) {
                 return PSA_ERROR_INVALID_ARGUMENT;
             }
-            mbedtls_ecp_keypair *ecp = NULL;
-            psa_status_t status = mbedtls_psa_ecp_load_representation(
+            status = mbedtls_psa_ecp_load_representation(
                 private_key->attr.type,
                 private_key->attr.bits,
                 private_key->key.data,
@@ -4920,6 +4926,8 @@ static psa_status_t psa_key_agreement_raw_internal(psa_algorithm_t alg,
             return status;
 #endif /* MBEDTLS_PSA_BUILTIN_ALG_ECDH */
         default:
+            (void) ecp;
+            (void) status;
             (void) private_key;
             (void) peer_key;
             (void) peer_key_length;
@@ -5015,6 +5023,7 @@ psa_status_t psa_raw_key_agreement(psa_algorithm_t alg,
     psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
     psa_status_t unlock_status = PSA_ERROR_CORRUPTION_DETECTED;
     psa_key_slot_t *slot = NULL;
+    size_t expected_length;
 
     if (!PSA_ALG_IS_KEY_AGREEMENT(alg)) {
         status = PSA_ERROR_INVALID_ARGUMENT;
@@ -5034,7 +5043,7 @@ psa_status_t psa_raw_key_agreement(psa_algorithm_t alg,
      * PSA_RAW_KEY_AGREEMENT_OUTPUT_SIZE() is exact so the point is moot.
      * If FFDH is implemented, PSA_RAW_KEY_AGREEMENT_OUTPUT_SIZE() can easily
      * be exact for it as well. */
-    size_t expected_length =
+    expected_length =
         PSA_RAW_KEY_AGREEMENT_OUTPUT_SIZE(slot->attr.type, slot->attr.bits);
     if (output_size < expected_length) {
         status = PSA_ERROR_BUFFER_TOO_SMALL;
@@ -5069,6 +5078,10 @@ exit:
 /****************************************************************/
 /* Random generation */
 /****************************************************************/
+
+#if defined(MBEDTLS_PSA_INJECT_ENTROPY)
+#include "mbedtls/entropy_poll.h"
+#endif
 
 /** Initialize the PSA random generator.
  */
@@ -5204,8 +5217,6 @@ int mbedtls_psa_get_random(void *p_rng,
 #endif /* MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG */
 
 #if defined(MBEDTLS_PSA_INJECT_ENTROPY)
-#include "mbedtls/entropy_poll.h"
-
 psa_status_t mbedtls_psa_inject_entropy(const uint8_t *seed,
                                         size_t seed_size)
 {

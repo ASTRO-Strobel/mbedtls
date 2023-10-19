@@ -36,13 +36,57 @@
 #define MBEDTLS_AESNI_AES      0x02000000u
 #define MBEDTLS_AESNI_CLMUL    0x00000002u
 
-#if defined(MBEDTLS_HAVE_ASM) && defined(__GNUC__) &&  \
-    (defined(__amd64__) || defined(__x86_64__))   &&  \
-    !defined(MBEDTLS_HAVE_X86_64)
+#if !defined(MBEDTLS_HAVE_X86_64) && \
+    (defined(__amd64__) || defined(__x86_64__) || \
+    defined(_M_X64) || defined(_M_AMD64)) && \
+    !defined(_M_ARM64EC)
 #define MBEDTLS_HAVE_X86_64
 #endif
 
-#if defined(MBEDTLS_HAVE_X86_64)
+#if !defined(MBEDTLS_HAVE_X86) && \
+    (defined(__i386__) || defined(_M_IX86))
+#define MBEDTLS_HAVE_X86
+#endif
+
+#if defined(MBEDTLS_AESNI_C) && \
+    (defined(MBEDTLS_HAVE_X86_64) || defined(MBEDTLS_HAVE_X86))
+
+/* Can we do AESNI with intrinsics?
+ * (Only implemented with certain compilers, only for certain targets.)
+ *
+ * NOTE: MBEDTLS_AESNI_HAVE_INTRINSICS and MBEDTLS_AESNI_HAVE_CODE are internal
+ *       macros that may change in future releases.
+ */
+#undef MBEDTLS_AESNI_HAVE_INTRINSICS
+#if defined(_MSC_VER)
+/* Visual Studio supports AESNI intrinsics since VS 2008 SP1. We only support
+ * VS 2013 and up for other reasons anyway, so no need to check the version. */
+#define MBEDTLS_AESNI_HAVE_INTRINSICS
+#endif
+/* GCC-like compilers: currently, we only support intrinsics if the requisite
+ * target flag is enabled when building the library (e.g. `gcc -mpclmul -msse2`
+ * or `clang -maes -mpclmul`). */
+#if defined(__GNUC__) && defined(__AES__) && defined(__PCLMUL__)
+#define MBEDTLS_AESNI_HAVE_INTRINSICS
+#endif
+
+/* Choose the implementation of AESNI, if one is available. */
+#undef MBEDTLS_AESNI_HAVE_CODE
+/* To minimize disruption when releasing the intrinsics-based implementation,
+ * favor the assembly-based implementation if it's available. We intend to
+ * revise this in a later release of Mbed TLS 3.x. In the long run, we will
+ * likely remove the assembly implementation. */
+#if defined(MBEDTLS_HAVE_ASM) && \
+    defined(__GNUC__) && defined(MBEDTLS_HAVE_X86_64)
+/* Can we do AESNI with inline assembly?
+ * (Only implemented with gas syntax, only for 64-bit.)
+ */
+#define MBEDTLS_AESNI_HAVE_CODE 1 // via assembly
+#elif defined(MBEDTLS_AESNI_HAVE_INTRINSICS)
+#define MBEDTLS_AESNI_HAVE_CODE 2 // via intrinsics
+#endif
+
+#if defined(MBEDTLS_AESNI_HAVE_CODE)
 
 #ifdef __cplusplus
 extern "C" {
@@ -131,6 +175,7 @@ int mbedtls_aesni_setkey_enc(unsigned char *rk,
 }
 #endif
 
-#endif /* MBEDTLS_HAVE_X86_64 */
+#endif /* MBEDTLS_AESNI_HAVE_CODE */
+#endif /* MBEDTLS_AESNI_C && (MBEDTLS_HAVE_X86_64 || MBEDTLS_HAVE_X86) */
 
 #endif /* MBEDTLS_AESNI_H */

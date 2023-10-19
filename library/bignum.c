@@ -1438,6 +1438,7 @@ void mpi_mul_hlp(size_t i,
                  mbedtls_mpi_uint b)
 {
     mbedtls_mpi_uint c = 0, t = 0;
+    (void) t;                   /* Unused in some architectures */
 
 #if defined(MULADDC_HUIT)
     for (; i >= 8; i -= 8) {
@@ -1482,8 +1483,6 @@ void mpi_mul_hlp(size_t i,
             MULADDC_STOP
     }
 #endif /* MULADDC_HUIT */
-
-    t++;
 
     while (c != 0) {
         *d += c; c = (*d < c); d++;
@@ -2085,6 +2084,7 @@ int mbedtls_mpi_exp_mod(mbedtls_mpi *X, const mbedtls_mpi *A,
     size_t window_bitsize;
     size_t i, j, nblimbs;
     size_t bufsize, nbits;
+    size_t exponent_bits_in_window = 0;
     mbedtls_mpi_uint ei, mm, state;
     mbedtls_mpi RR, T, W[(size_t) 1 << MBEDTLS_MPI_WINDOW_SIZE], WW, Apos;
     int neg;
@@ -2143,8 +2143,9 @@ int mbedtls_mpi_exp_mod(mbedtls_mpi *X, const mbedtls_mpi *A,
      * and squarings. Firstly, when multiplying by an element of the window
      * W[i], we do a constant-trace table lookup to obfuscate i. This leaves
      * squarings as having a different memory access patterns from other
-     * multiplications. So secondly, we put the accumulator X in the table as
-     * well, and also do a constant-trace table lookup to multiply by X.
+     * multiplications. So secondly, we put the accumulator in the table as
+     * well, and also do a constant-trace table lookup to multiply by the
+     * accumulator which is W[x_index].
      *
      * This way, all multiplications take the form of a lookup-and-multiply.
      * The number of lookup-and-multiply operations inside each iteration of
@@ -2157,19 +2158,16 @@ int mbedtls_mpi_exp_mod(mbedtls_mpi *X, const mbedtls_mpi *A,
      * observe both memory accesses and branches. However, branch prediction
      * exploitation typically requires many traces of execution over the same
      * data, which is defeated by randomized blinding.
-     *
-     * To achieve this, we make a copy of X and we use the table entry in each
-     * calculation from this point on.
      */
     const size_t x_index = 0;
     mbedtls_mpi_init(&W[x_index]);
-    mbedtls_mpi_copy(&W[x_index], X);
 
     j = N->n + 1;
-    /* All W[i] and X must have at least N->n limbs for the mpi_montmul()
-     * and mpi_montred() calls later. Here we ensure that W[1] and X are
-     * large enough, and later we'll grow other W[i] to the same length.
-     * They must not be shrunk midway through this function!
+    /* All W[i] including the accumulator must have at least N->n limbs for
+     * the mpi_montmul() and mpi_montred() calls later. Here we ensure that
+     * W[1] and the accumulator W[x_index] are large enough. later we'll grow
+     * other W[i] to the same length. They must not be shrunk midway through
+     * this function!
      */
     MBEDTLS_MPI_CHK(mbedtls_mpi_grow(&W[x_index], j));
     MBEDTLS_MPI_CHK(mbedtls_mpi_grow(&W[1],  j));
@@ -2258,7 +2256,6 @@ int mbedtls_mpi_exp_mod(mbedtls_mpi *X, const mbedtls_mpi *A,
     nblimbs = E->n;
     bufsize = 0;
     nbits   = 0;
-    size_t exponent_bits_in_window = 0;
     state   = 0;
 
     while (1) {
@@ -2351,7 +2348,7 @@ int mbedtls_mpi_exp_mod(mbedtls_mpi *X, const mbedtls_mpi *A,
     /*
      * Load the result in the output variable.
      */
-    mbedtls_mpi_copy(X, &W[x_index]);
+    MBEDTLS_MPI_CHK(mbedtls_mpi_copy(X, &W[x_index]));
 
 cleanup:
 

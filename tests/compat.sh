@@ -30,6 +30,11 @@ set -u
 # where it may output seemingly unlimited length error logs.
 ulimit -f 20971520
 
+ORIGINAL_PWD=$PWD
+if ! cd "$(dirname "$0")"; then
+    exit 125
+fi
+
 # initialise counters
 TESTS=0
 FAILED=0
@@ -77,6 +82,17 @@ else
     PEER_GNUTLS=""
 fi
 
+guess_config_name() {
+    if git diff --quiet ../include/mbedtls/config.h 2>/dev/null; then
+        echo "default"
+    else
+        echo "unknown"
+    fi
+}
+: ${MBEDTLS_TEST_OUTCOME_FILE=}
+: ${MBEDTLS_TEST_CONFIGURATION:="$(guess_config_name)"}
+: ${MBEDTLS_TEST_PLATFORM:="$(uname -s | tr -c \\n0-9A-Za-z _)-$(uname -m | tr -c \\n0-9A-Za-z _)"}
+
 # default values for options
 # /!\ keep this synchronised with:
 # - basic-build-test.sh
@@ -112,6 +128,38 @@ print_usage() {
     printf "            \tAlso available: GnuTLS (needs v3.2.15 or higher)\n"
     printf "  -M|--memcheck\tCheck memory leaks and errors.\n"
     printf "  -v|--verbose\tSet verbose output.\n"
+    printf "     --list-test-case\tList all potential test cases (No Execution)\n"
+    printf "     --outcome-file\tFile where test outcomes are written\n"
+    printf "                   \t(default: \$MBEDTLS_TEST_OUTCOME_FILE, none if empty)\n"
+}
+
+# print_test_case <CLIENT> <SERVER> <STANDARD_CIPHER_SUITE>
+print_test_case() {
+    for i in $3; do
+        uniform_title $1 $2 $i
+        echo $TITLE
+    done
+}
+
+# list_test_case lists all potential test cases in compat.sh without execution
+list_test_case() {
+    for MODE in $MODES; do
+        for TYPE in $TYPES; do
+            for VERIFY in $VERIFIES; do
+                VERIF=$(echo $VERIFY | tr '[:upper:]' '[:lower:]')
+                reset_ciphersuites
+                add_common_ciphersuites
+                add_openssl_ciphersuites
+                add_gnutls_ciphersuites
+                add_mbedtls_ciphersuites
+                print_test_case m O "$O_CIPHERS"
+                print_test_case O m "$O_CIPHERS"
+                print_test_case m G "$G_CIPHERS"
+                print_test_case G m "$G_CIPHERS"
+                print_test_case m m "$M_CIPHERS"
+            done
+        done
+    done
 }
 
 get_options() {
@@ -140,6 +188,15 @@ get_options() {
                 ;;
             -M|--memcheck)
                 MEMCHECK=1
+                ;;
+            # Please check scripts/check_test_cases.py correspondingly
+            # if you have to modify option, --list-test-case
+            --list-test-case)
+                list_test_case
+                exit $?
+                ;;
+            --outcome-file)
+                shift; MBEDTLS_TEST_OUTCOME_FILE=$1
                 ;;
             -h|--help)
                 print_usage
@@ -215,22 +272,11 @@ filter()
   echo "$NEW_LIST" | sed -e 's/[[:space:]][[:space:]]*/ /g' -e 's/^ //' -e 's/ $//'
 }
 
-# OpenSSL 1.0.1h with -Verify wants a ClientCertificate message even for
-# PSK ciphersuites with DTLS, which is incorrect, so disable them for now
-check_openssl_server_bug()
-{
-    if test "X$VERIFY" = "XYES" && is_dtls "$MODE" && \
-        echo "$1" | grep "^TLS-PSK" >/dev/null;
-    then
-        SKIP_NEXT="YES"
-    fi
-}
-
 filter_ciphersuites()
 {
     if [ "X" != "X$FILTER" -o "X" != "X$EXCLUDE" ];
     then
-        # Ciphersuite for mbed TLS
+        # Ciphersuite for Mbed TLS
         M_CIPHERS=$( filter "$M_CIPHERS" )
 
         # Ciphersuite for OpenSSL
@@ -240,9 +286,9 @@ filter_ciphersuites()
         G_CIPHERS=$( filter "$G_CIPHERS" )
     fi
 
-    # For GnuTLS client -> mbed TLS server,
+    # For GnuTLS client -> Mbed TLS server,
     # we need to force IPv4 by connecting to 127.0.0.1 but then auth fails
-    if [ "X$VERIFY" = "XYES" ] && is_dtls "$MODE"; then
+    if is_dtls "$MODE" && [ "X$VERIFY" = "XYES" ]; then
         G_CIPHERS=""
     fi
 }
@@ -872,6 +918,16 @@ add_mbedtls_ciphersuites()
     esac
 }
 
+# o_check_ciphersuite CIPHER_SUITE_NAME
+o_check_ciphersuite()
+{
+    if [ "${O_SUPPORT_ECDH}" = "NO" ]; then
+        case "$1" in
+            *ECDH-*) SKIP_NEXT="YES"
+        esac
+    fi
+}
+
 setup_arguments()
 {
     O_MODE=""
@@ -943,7 +999,6 @@ setup_arguments()
     M_CLIENT_ARGS="server_port=$PORT server_addr=127.0.0.1 force_version=$MODE"
     O_CLIENT_ARGS="-connect localhost:$PORT -$O_MODE"
     G_CLIENT_ARGS="-p $PORT --debug 3 $G_MODE"
-    G_CLIENT_PRIO="NONE:$G_PRIO_MODE:+COMP-NULL:+CURVE-ALL:+SIGN-ALL"
 
     # Newer versions of OpenSSL have a syntax to enable all "ciphers", even
     # low-security ones. This covers not just cipher suites but also protocol
@@ -957,6 +1012,11 @@ setup_arguments()
             O_CLIENT_ARGS="$O_CLIENT_ARGS -cipher ALL@SECLEVEL=0"
             O_SERVER_ARGS="$O_SERVER_ARGS -cipher ALL@SECLEVEL=0"
             ;;
+    esac
+
+    case $($OPENSSL ciphers ALL) in
+        *ECDH-ECDSA*|*ECDH-RSA*) O_SUPPORT_ECDH="YES";;
+        *) O_SUPPORT_ECDH="NO";;
     esac
 
     if [ "X$VERIFY" = "XYES" ];
@@ -1142,21 +1202,59 @@ wait_client_done() {
     echo "EXIT: $EXIT" >> $CLI_OUT
 }
 
+# record_outcome <outcome> [<failure-reason>]
+record_outcome() {
+    echo "$1"
+    if [ -n "$MBEDTLS_TEST_OUTCOME_FILE" ]; then
+        # The test outcome file has the format (in single line):
+        # platform;configuration;
+        # test suite name;test case description;
+        # PASS/FAIL/SKIP;[failure cause]
+        printf '%s;%s;%s;%s;%s;%s\n'                                    \
+            "$MBEDTLS_TEST_PLATFORM" "$MBEDTLS_TEST_CONFIGURATION"      \
+            "compat" "$TITLE"                                           \
+            "$1" "${2-}"                                                \
+            >> "$MBEDTLS_TEST_OUTCOME_FILE"
+    fi
+}
+
+# display additional information if test case fails
+report_fail() {
+    FAIL_PROMPT="outputs saved to c-srv-${TESTS}.log, c-cli-${TESTS}.log"
+    record_outcome "FAIL" "$FAIL_PROMPT"
+    cp $SRV_OUT c-srv-${TESTS}.log
+    cp $CLI_OUT c-cli-${TESTS}.log
+    echo "  ! $FAIL_PROMPT"
+
+    if [ "${LOG_FAILURE_ON_STDOUT:-0}" != 0 ]; then
+        echo "  ! server output:"
+        cat c-srv-${TESTS}.log
+        echo "  ! ==================================================="
+        echo "  ! client output:"
+        cat c-cli-${TESTS}.log
+    fi
+}
+
+# uniform_title <CLIENT> <SERVER> <STANDARD_CIPHER_SUITE>
+# $TITLE is considered as test case description for both --list-test-case and
+# MBEDTLS_TEST_OUTCOME_FILE. This function aims to control the format of
+# each test case description.
+uniform_title() {
+    TITLE="$1->$2 $MODE,$VERIF $3"
+}
+
 # run_client <name> <cipher>
 run_client() {
     # announce what we're going to do
     TESTS=$(( $TESTS + 1 ))
-    VERIF=$(echo $VERIFY | tr '[:upper:]' '[:lower:]')
-    TITLE="`echo $1 | head -c1`->`echo $SERVER_NAME | head -c1`"
-    TITLE="$TITLE $MODE,$VERIF $2"
-    printf "%s " "$TITLE"
-    LEN=$(( 72 - `echo "$TITLE" | wc -c` ))
-    for i in `seq 1 $LEN`; do printf '.'; done; printf ' '
+    uniform_title "${1%"${1#?}"}" "${SERVER_NAME%"${SERVER_NAME#?}"}" $2
+    DOTS72="........................................................................"
+    printf "%s %.*s " "$TITLE" "$((71 - ${#TITLE}))" "$DOTS72"
 
     # should we skip?
     if [ "X$SKIP_NEXT" = "XYES" ]; then
         SKIP_NEXT="NO"
-        echo "SKIP"
+        record_outcome "SKIP"
         SKIPPED=$(( $SKIPPED + 1 ))
         return
     fi
@@ -1173,7 +1271,7 @@ run_client() {
             if [ $EXIT -eq 0 ]; then
                 RESULT=0
             else
-                # If the cipher isn't supported...
+                # If it is NULL cipher ...
                 if grep 'Cipher is (NONE)' $CLI_OUT >/dev/null; then
                     RESULT=1
                 else
@@ -1250,26 +1348,14 @@ run_client() {
     # report and count result
     case $RESULT in
         "0")
-            echo PASS
+            record_outcome "PASS"
             ;;
         "1")
-            echo SKIP
+            record_outcome "SKIP"
             SKIPPED=$(( $SKIPPED + 1 ))
             ;;
         "2")
-            echo FAIL
-            cp $SRV_OUT c-srv-${TESTS}.log
-            cp $CLI_OUT c-cli-${TESTS}.log
-            echo "  ! outputs saved to c-srv-${TESTS}.log, c-cli-${TESTS}.log"
-
-            if [ "${LOG_FAILURE_ON_STDOUT:-0}" != 0 ]; then
-                echo "  ! server output:"
-                cat c-srv-${TESTS}.log
-                echo "  ! ==================================================="
-                echo "  ! client output:"
-                cat c-cli-${TESTS}.log
-            fi
-
+            report_fail
             FAILED=$(( $FAILED + 1 ))
             ;;
     esac
@@ -1281,12 +1367,15 @@ run_client() {
 # MAIN
 #
 
-if cd $( dirname $0 ); then :; else
-    echo "cd $( dirname $0 ) failed" >&2
-    exit 1
-fi
-
 get_options "$@"
+
+# Make the outcome file path relative to the original directory, not
+# to .../tests
+case "$MBEDTLS_TEST_OUTCOME_FILE" in
+    [!/]*)
+        MBEDTLS_TEST_OUTCOME_FILE="$ORIGINAL_PWD/$MBEDTLS_TEST_OUTCOME_FILE"
+        ;;
+esac
 
 # sanity checks, avoid an avalanche of errors
 if [ ! -x "$M_SRV" ]; then
@@ -1343,9 +1432,20 @@ SKIP_NEXT="NO"
 
 trap cleanup INT TERM HUP
 
-for VERIFY in $VERIFIES; do
-    for MODE in $MODES; do
-        for TYPE in $TYPES; do
+for MODE in $MODES; do
+    for TYPE in $TYPES; do
+
+        # PSK cipher suites do not allow client certificate verification.
+        # This means PSK test cases with VERIFY=YES should be replaced by
+        # VERIFY=NO or be ignored. SUB_VERIFIES variable is used to constrain
+        # verification option for PSK test cases.
+        SUB_VERIFIES=$VERIFIES
+        if [ "$TYPE" = "PSK" ]; then
+            SUB_VERIFIES="NO"
+        fi
+
+        for VERIFY in $SUB_VERIFIES; do
+            VERIF=$(echo $VERIFY | tr '[:upper:]' '[:lower:]')
             for PEER in $PEERS; do
 
             setup_arguments
@@ -1375,7 +1475,7 @@ for VERIFY in $VERIFIES; do
                     if [ "X" != "X$M_CIPHERS" ]; then
                         start_server "OpenSSL"
                         for i in $M_CIPHERS; do
-                            check_openssl_server_bug $i
+                            o_check_ciphersuite "$i"
                             run_client mbedTLS $i
                         done
                         stop_server
@@ -1384,6 +1484,7 @@ for VERIFY in $VERIFIES; do
                     if [ "X" != "X$O_CIPHERS" ]; then
                         start_server "mbedTLS"
                         for i in $O_CIPHERS; do
+                            o_check_ciphersuite "$i"
                             run_client OpenSSL $i
                         done
                         stop_server

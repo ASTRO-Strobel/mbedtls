@@ -17,11 +17,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Abort on errors (and uninitiliased variables)
+# Abort on errors (and uninitialised variables)
 set -eu
 
 if [ -d library -a -d include -a -d tests ]; then :; else
-    echo "Must be run from mbed TLS root" >&2
+    echo "Must be run from Mbed TLS root" >&2
     exit 1
 fi
 

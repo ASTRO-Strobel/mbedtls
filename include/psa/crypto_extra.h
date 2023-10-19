@@ -107,7 +107,7 @@ static inline psa_algorithm_t psa_get_key_enrollment_algorithm(
  *         indicates the slot number that contains it.
  * \retval #PSA_ERROR_NOT_PERMITTED
  *         The caller is not permitted to query the slot number.
- *         Mbed Crypto currently does not return this error.
+ *         Mbed TLS currently does not return this error.
  * \retval #PSA_ERROR_INVALID_ARGUMENT
  *         The key is not located in a secure element.
  */
@@ -187,12 +187,12 @@ static inline void psa_clear_key_slot_number(
  *         or the specified slot number is not valid.
  * \retval #PSA_ERROR_NOT_PERMITTED
  *         The caller is not authorized to register the specified key slot.
- * \retval #PSA_ERROR_INSUFFICIENT_MEMORY
- * \retval #PSA_ERROR_INSUFFICIENT_STORAGE
- * \retval #PSA_ERROR_COMMUNICATION_FAILURE
- * \retval #PSA_ERROR_DATA_INVALID
- * \retval #PSA_ERROR_DATA_CORRUPT
- * \retval #PSA_ERROR_CORRUPTION_DETECTED
+ * \retval #PSA_ERROR_INSUFFICIENT_MEMORY \emptydescription
+ * \retval #PSA_ERROR_INSUFFICIENT_STORAGE \emptydescription
+ * \retval #PSA_ERROR_COMMUNICATION_FAILURE \emptydescription
+ * \retval #PSA_ERROR_DATA_INVALID \emptydescription
+ * \retval #PSA_ERROR_DATA_CORRUPT \emptydescription
+ * \retval #PSA_ERROR_CORRUPTION_DETECTED \emptydescription
  * \retval #PSA_ERROR_BAD_STATE
  *         The library has not been previously initialized by psa_crypto_init().
  *         It is implementation-dependent whether a failure to initialize
@@ -219,7 +219,7 @@ void mbedtls_psa_crypto_free(void);
  * resource consumption related to the PSA keystore.
  *
  * \note The content of this structure is not part of the stable API and ABI
- *       of Mbed Crypto and may change arbitrarily from version to version.
+ *       of Mbed TLS and may change arbitrarily from version to version.
  */
 typedef struct mbedtls_psa_stats_s {
     /** Number of slots containing key material for a volatile key. */
@@ -248,7 +248,7 @@ typedef struct mbedtls_psa_stats_s {
 /** \brief Get statistics about
  * resource consumption related to the PSA keystore.
  *
- * \note When Mbed Crypto is built as part of a service, with isolation
+ * \note When Mbed TLS is built as part of a service, with isolation
  *       between the application and the keystore, the service may or
  *       may not expose this function.
  */
@@ -487,10 +487,10 @@ psa_status_t mbedtls_psa_inject_entropy(const uint8_t *seed,
  *                              according to \p type as described above.
  * \param data_length           Size of the \p data buffer in bytes.
  *
- * \retval #PSA_SUCCESS
- * \retval #PSA_ERROR_INVALID_ARGUMENT
- * \retval #PSA_ERROR_NOT_SUPPORTED
- * \retval #PSA_ERROR_INSUFFICIENT_MEMORY
+ * \retval #PSA_SUCCESS \emptydescription
+ * \retval #PSA_ERROR_INVALID_ARGUMENT \emptydescription
+ * \retval #PSA_ERROR_NOT_SUPPORTED \emptydescription
+ * \retval #PSA_ERROR_INSUFFICIENT_MEMORY \emptydescription
  */
 psa_status_t psa_set_key_domain_parameters(psa_key_attributes_t *attributes,
                                            psa_key_type_t type,
@@ -517,8 +517,8 @@ psa_status_t psa_set_key_domain_parameters(psa_key_attributes_t *attributes,
  * \param[out] data_length      On success, the number of bytes
  *                              that make up the key domain parameters data.
  *
- * \retval #PSA_SUCCESS
- * \retval #PSA_ERROR_BUFFER_TOO_SMALL
+ * \retval #PSA_SUCCESS \emptydescription
+ * \retval #PSA_ERROR_BUFFER_TOO_SMALL \emptydescription
  */
 psa_status_t psa_get_key_domain_parameters(
     const psa_key_attributes_t *attributes,

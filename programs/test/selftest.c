@@ -77,23 +77,51 @@ static int calloc_self_test(int verbose)
     void *empty2 = mbedtls_calloc(0, 1);
     void *buffer1 = mbedtls_calloc(1, 1);
     void *buffer2 = mbedtls_calloc(1, 1);
+    unsigned int buffer_3_size = 256;
+    unsigned int buffer_4_size = 4097; /* Allocate more than the usual page size */
+    unsigned char *buffer3 = mbedtls_calloc(buffer_3_size, 1);
+    unsigned char *buffer4 = mbedtls_calloc(buffer_4_size, 1);
 
     if (empty1 == NULL && empty2 == NULL) {
         if (verbose) {
-            mbedtls_printf("  CALLOC(0): passed (NULL)\n");
+            mbedtls_printf("  CALLOC(0,1): passed (NULL)\n");
         }
     } else if (empty1 == NULL || empty2 == NULL) {
         if (verbose) {
-            mbedtls_printf("  CALLOC(0): failed (mix of NULL and non-NULL)\n");
+            mbedtls_printf("  CALLOC(0,1): failed (mix of NULL and non-NULL)\n");
         }
         ++failures;
     } else if (empty1 == empty2) {
         if (verbose) {
-            mbedtls_printf("  CALLOC(0): passed (same non-null)\n");
+            mbedtls_printf("  CALLOC(0,1): passed (same non-null)\n");
         }
     } else {
         if (verbose) {
-            mbedtls_printf("  CALLOC(0): passed (distinct non-null)\n");
+            mbedtls_printf("  CALLOC(0,1): passed (distinct non-null)\n");
+        }
+    }
+
+    mbedtls_free(empty1);
+    mbedtls_free(empty2);
+
+    empty1 = mbedtls_calloc(1, 0);
+    empty2 = mbedtls_calloc(1, 0);
+    if (empty1 == NULL && empty2 == NULL) {
+        if (verbose) {
+            mbedtls_printf("  CALLOC(1,0): passed (NULL)\n");
+        }
+    } else if (empty1 == NULL || empty2 == NULL) {
+        if (verbose) {
+            mbedtls_printf("  CALLOC(1,0): failed (mix of NULL and non-NULL)\n");
+        }
+        ++failures;
+    } else if (empty1 == empty2) {
+        if (verbose) {
+            mbedtls_printf("  CALLOC(1,0): passed (same non-null)\n");
+        }
+    } else {
+        if (verbose) {
+            mbedtls_printf("  CALLOC(1,0): passed (distinct non-null)\n");
         }
     }
 
@@ -126,6 +154,28 @@ static int calloc_self_test(int verbose)
         }
     }
 
+    for (unsigned int i = 0; i < buffer_3_size; i++) {
+        if (buffer3[i] != 0) {
+            ++failures;
+            if (verbose) {
+                mbedtls_printf("  CALLOC(%u): failed (memory not initialized to 0)\n",
+                               buffer_3_size);
+            }
+            break;
+        }
+    }
+
+    for (unsigned int i = 0; i < buffer_4_size; i++) {
+        if (buffer4[i] != 0) {
+            ++failures;
+            if (verbose) {
+                mbedtls_printf("  CALLOC(%u): failed (memory not initialized to 0)\n",
+                               buffer_4_size);
+            }
+            break;
+        }
+    }
+
     if (verbose) {
         mbedtls_printf("\n");
     }
@@ -133,6 +183,8 @@ static int calloc_self_test(int verbose)
     mbedtls_free(empty2);
     mbedtls_free(buffer1);
     mbedtls_free(buffer2);
+    mbedtls_free(buffer3);
+    mbedtls_free(buffer4);
     return failures;
 }
 #endif /* MBEDTLS_SELF_TEST */
@@ -353,6 +405,9 @@ int main(int argc, char *argv[])
     unsigned char buf[1000000];
 #endif
     void *pointer;
+#if defined(_WIN32)
+    int ci = 0; /* ci = 1 => running in CI, so don't wait for a key press */
+#endif
 
     /*
      * The C standard doesn't guarantee that all-bits-0 is the representation
@@ -380,6 +435,10 @@ int main(int argc, char *argv[])
         } else if (strcmp(*argp, "--exclude") == 0 ||
                    strcmp(*argp, "-x") == 0) {
             exclude_mode = 1;
+#if defined(_WIN32)
+        } else if (strcmp(*argp, "--ci") == 0) {
+            ci = 1;
+#endif
         } else {
             break;
         }
@@ -450,8 +509,10 @@ int main(int argc, char *argv[])
             mbedtls_printf("  [ All tests PASS ]\n\n");
         }
 #if defined(_WIN32)
-        mbedtls_printf("  Press Enter to exit this program.\n");
-        fflush(stdout); getchar();
+        if (!ci) {
+            mbedtls_printf("  Press Enter to exit this program.\n");
+            fflush(stdout); getchar();
+        }
 #endif
     }
 
