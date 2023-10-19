@@ -794,7 +794,8 @@ int mbedtls_oid_get_numeric_string(char *buf, size_t size,
         return MBEDTLS_ERR_ASN1_OUT_OF_DATA;
     }
 
-    for (size_t i = 0; i < oid->len; i++) {
+    size_t i;
+    for (i = 0; i < oid->len; i++) {
         /* Prevent overflow in value. */
         if (value > (UINT_MAX >> 7)) {
             return MBEDTLS_ERR_ASN1_INVALID_DATA;
