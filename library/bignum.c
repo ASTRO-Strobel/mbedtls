@@ -1931,8 +1931,8 @@ mbedtls_mpi_uint mbedtls_mpi_montmul_init(const mbedtls_mpi_uint *N)
     mbedtls_mpi_uint x = N[0];
 
     x += ((N[0] + 2) & 4) << 1;
-
-    for (unsigned int i = biL; i >= 8; i /= 2) {
+    unsigned int i;
+    for (i = biL; i >= 8; i /= 2) {
         x *= (2 - (N[0] * x));
     }
 
