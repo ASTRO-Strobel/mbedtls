@@ -5,19 +5,7 @@
  */
 /*
  *  Copyright The Mbed TLS Contributors
- *  SPDX-License-Identifier: Apache-2.0
- *
- *  Licensed under the Apache License, Version 2.0 (the "License"); you may
- *  not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *  http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- *  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ *  SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
  */
 #ifndef MBEDTLS_SSL_INTERNAL_H
 #define MBEDTLS_SSL_INTERNAL_H
@@ -479,7 +467,8 @@ struct mbedtls_ssl_handshake_params {
 
     void (*update_checksum)(mbedtls_ssl_context *, const unsigned char *, size_t);
     void (*calc_verify)(const mbedtls_ssl_context *, unsigned char *, size_t *);
-    void (*calc_finished)(mbedtls_ssl_context *, unsigned char *, int);
+    MBEDTLS_CHECK_RETURN_CRITICAL
+    int (*calc_finished)(mbedtls_ssl_context *, unsigned char *, int);
     mbedtls_ssl_tls_prf_cb *tls_prf;
 
 #if defined(MBEDTLS_DHM_C)
@@ -1225,6 +1214,16 @@ static inline size_t mbedtls_ssl_hs_hdr_len(const mbedtls_ssl_context *ssl)
 #endif
     return 4;
 }
+
+/** Get the host name from the SSL context.
+ *
+ * \param[in]   ssl     SSL context
+ *
+ * \return The \p hostname pointer from the SSL context.
+ *         \c NULL if mbedtls_ssl_set_hostname() has never been called on
+ *         \p ssl or if it was last called with \p NULL.
+ */
+const char *mbedtls_ssl_get_hostname_pointer(const mbedtls_ssl_context *ssl);
 
 #if defined(MBEDTLS_SSL_PROTO_DTLS)
 void mbedtls_ssl_send_flight_completed(mbedtls_ssl_context *ssl);

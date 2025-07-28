@@ -2,19 +2,7 @@
  *  SSLv3/TLSv1 shared functions
  *
  *  Copyright The Mbed TLS Contributors
- *  SPDX-License-Identifier: Apache-2.0
- *
- *  Licensed under the Apache License, Version 2.0 (the "License"); you may
- *  not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *  http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- *  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ *  SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
  */
 /*
  *  The SSL 3.0 specification was drafted by Netscape in 1996,
@@ -49,6 +37,92 @@
 #if defined(MBEDTLS_X509_CRT_PARSE_C)
 #include "mbedtls/oid.h"
 #endif
+
+#if defined(MBEDTLS_X509_CRT_PARSE_C)
+
+/* A magic value for `ssl->hostname` indicating that
+ * mbedtls_ssl_set_hostname() has been called with `NULL`.
+ * If mbedtls_ssl_set_hostname() has never been called on `ssl`, then
+ * `ssl->hostname == NULL`. */
+static const char *const ssl_hostname_skip_cn_verification = "";
+
+#if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED)
+/** Whether mbedtls_ssl_set_hostname() has been called.
+ *
+ * \param[in]   ssl     SSL context
+ *
+ * \return \c 1 if mbedtls_ssl_set_hostname() has been called on \p ssl
+ *         (including `mbedtls_ssl_set_hostname(ssl, NULL)`),
+ *         otherwise \c 0.
+ */
+static int mbedtls_ssl_has_set_hostname_been_called(
+    const mbedtls_ssl_context *ssl)
+{
+    return ssl->hostname != NULL;
+}
+#endif
+
+const char *mbedtls_ssl_get_hostname_pointer(const mbedtls_ssl_context *ssl)
+{
+    if (ssl->hostname == ssl_hostname_skip_cn_verification) {
+        return NULL;
+    }
+    return ssl->hostname;
+}
+
+static void mbedtls_ssl_free_hostname(mbedtls_ssl_context *ssl)
+{
+    if (ssl->hostname != NULL &&
+        ssl->hostname != ssl_hostname_skip_cn_verification) {
+        mbedtls_platform_zeroize(ssl->hostname, strlen(ssl->hostname));
+        mbedtls_free(ssl->hostname);
+    }
+    ssl->hostname = NULL;
+}
+
+int mbedtls_ssl_set_hostname(mbedtls_ssl_context *ssl, const char *hostname)
+{
+    /* Initialize to suppress unnecessary compiler warning */
+    size_t hostname_len = 0;
+
+    /* Check if new hostname is valid before
+     * making any change to current one */
+    if (hostname != NULL) {
+        hostname_len = strlen(hostname);
+
+        if (hostname_len > MBEDTLS_SSL_MAX_HOST_NAME_LEN) {
+            return MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
+        }
+    }
+
+    /* Now it's clear that we will overwrite the old hostname,
+     * so we can free it safely */
+    mbedtls_ssl_free_hostname(ssl);
+
+    if (hostname == NULL) {
+        /* Passing NULL as hostname clears the old one, but leaves a
+         * special marker to indicate that mbedtls_ssl_set_hostname()
+         * has been called. */
+        /* ssl->hostname should be const, but isn't. We won't actually
+         * write to the buffer, so it's ok to cast away the const. */
+        ssl->hostname = (char *) ssl_hostname_skip_cn_verification;
+    } else {
+        ssl->hostname = mbedtls_calloc(1, hostname_len + 1);
+        if (ssl->hostname == NULL) {
+            /* mbedtls_ssl_set_hostname() has been called, but unsuccessfully.
+             * Leave ssl->hostname in the same state as if the function had
+             * not been called, i.e. a null pointer. */
+            return MBEDTLS_ERR_SSL_ALLOC_FAILED;
+        }
+
+        memcpy(ssl->hostname, hostname, hostname_len);
+
+        ssl->hostname[hostname_len] = '\0';
+    }
+
+    return 0;
+}
+#endif /* MBEDTLS_X509_CRT_PARSE_C */
 
 #if defined(MBEDTLS_SSL_PROTO_DTLS)
 
@@ -550,6 +624,23 @@ exit:
 }
 #endif /* MBEDTLS_SSL_PROTO_TLS1) || MBEDTLS_SSL_PROTO_TLS1_1 */
 
+#if defined(MBEDTLS_USE_PSA_CRYPTO)
+static int mbedtls_ssl_md_error_from_psa(psa_status_t status)
+{
+    switch (status) {
+        case PSA_ERROR_NOT_SUPPORTED:
+            return MBEDTLS_ERR_MD_FEATURE_UNAVAILABLE;
+        case PSA_ERROR_BAD_STATE: /* Intentional fallthrough */
+        case PSA_ERROR_BUFFER_TOO_SMALL:
+            return MBEDTLS_ERR_MD_BAD_INPUT_DATA;
+        case PSA_ERROR_INSUFFICIENT_MEMORY:
+            return MBEDTLS_ERR_MD_ALLOC_FAILED;
+        default:
+            return MBEDTLS_ERR_MD_HW_ACCEL_FAILED;
+    }
+}
+#endif
+
 #if defined(MBEDTLS_SSL_PROTO_TLS1_2)
 #if defined(MBEDTLS_USE_PSA_CRYPTO)
 
@@ -818,25 +909,25 @@ static void ssl_update_checksum_md5sha1(mbedtls_ssl_context *, const unsigned ch
 
 #if defined(MBEDTLS_SSL_PROTO_SSL3)
 static void ssl_calc_verify_ssl(const mbedtls_ssl_context *, unsigned char *, size_t *);
-static void ssl_calc_finished_ssl(mbedtls_ssl_context *, unsigned char *, int);
+static int ssl_calc_finished_ssl(mbedtls_ssl_context *, unsigned char *, int);
 #endif
 
 #if defined(MBEDTLS_SSL_PROTO_TLS1) || defined(MBEDTLS_SSL_PROTO_TLS1_1)
 static void ssl_calc_verify_tls(const mbedtls_ssl_context *, unsigned char *, size_t *);
-static void ssl_calc_finished_tls(mbedtls_ssl_context *, unsigned char *, int);
+static int ssl_calc_finished_tls(mbedtls_ssl_context *, unsigned char *, int);
 #endif
 
 #if defined(MBEDTLS_SSL_PROTO_TLS1_2)
 #if defined(MBEDTLS_SHA256_C)
 static void ssl_update_checksum_sha256(mbedtls_ssl_context *, const unsigned char *, size_t);
 static void ssl_calc_verify_tls_sha256(const mbedtls_ssl_context *, unsigned char *, size_t *);
-static void ssl_calc_finished_tls_sha256(mbedtls_ssl_context *, unsigned char *, int);
+static int ssl_calc_finished_tls_sha256(mbedtls_ssl_context *, unsigned char *, int);
 #endif
 
 #if defined(MBEDTLS_SHA512_C) && !defined(MBEDTLS_SHA512_NO_SHA384)
 static void ssl_update_checksum_sha384(mbedtls_ssl_context *, const unsigned char *, size_t);
 static void ssl_calc_verify_tls_sha384(const mbedtls_ssl_context *, unsigned char *, size_t *);
-static void ssl_calc_finished_tls_sha384(mbedtls_ssl_context *, unsigned char *, int);
+static int ssl_calc_finished_tls_sha384(mbedtls_ssl_context *, unsigned char *, int);
 #endif
 #endif /* MBEDTLS_SSL_PROTO_TLS1_2 */
 
@@ -1004,8 +1095,7 @@ static int ssl_populate_transform(mbedtls_ssl_transform *transform,
     !defined(MBEDTLS_SSL_EXPORT_KEYS) && \
     !defined(MBEDTLS_SSL_DTLS_CONNECTION_ID) && \
     !defined(MBEDTLS_DEBUG_C)
-    ssl = NULL; /* make sure we don't use it except for those cases */
-    (void) ssl;
+    (void) ssl; /* ssl is unused except for those cases */
 #endif
 
     /*
@@ -2534,13 +2624,33 @@ static int ssl_parse_certificate_coordinate(mbedtls_ssl_context *ssl,
     return SSL_CERTIFICATE_EXPECTED;
 }
 
+static int get_hostname_for_verification(mbedtls_ssl_context *ssl,
+                                         const char **hostname)
+{
+    if (!mbedtls_ssl_has_set_hostname_been_called(ssl)) {
+        MBEDTLS_SSL_DEBUG_MSG(1, ("Certificate verification without having set hostname"));
+#if !defined(MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME)
+        if (ssl->conf->endpoint == MBEDTLS_SSL_IS_CLIENT &&
+            ssl->conf->authmode == MBEDTLS_SSL_VERIFY_REQUIRED) {
+            return MBEDTLS_ERR_SSL_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME;
+        }
+#endif
+    }
+
+    *hostname = mbedtls_ssl_get_hostname_pointer(ssl);
+    if (*hostname == NULL) {
+        MBEDTLS_SSL_DEBUG_MSG(2, ("Certificate verification without CN verification"));
+    }
+
+    return 0;
+}
+
 MBEDTLS_CHECK_RETURN_CRITICAL
 static int ssl_parse_certificate_verify(mbedtls_ssl_context *ssl,
                                         int authmode,
                                         mbedtls_x509_crt *chain,
                                         void *rs_ctx)
 {
-    int ret = 0;
     const mbedtls_ssl_ciphersuite_t *ciphersuite_info =
         ssl->handshake->ciphersuite_info;
     int have_ca_chain = 0;
@@ -2562,6 +2672,13 @@ static int ssl_parse_certificate_verify(mbedtls_ssl_context *ssl,
         p_vrfy = ssl->conf->p_vrfy;
     }
 
+    const char *hostname = "";
+    int ret = get_hostname_for_verification(ssl, &hostname);
+    if (ret != 0) {
+        MBEDTLS_SSL_DEBUG_RET(1, "get_hostname_for_verification", ret);
+        return ret;
+    }
+
     /*
      * Main check: verify certificate
      */
@@ -2576,7 +2693,7 @@ static int ssl_parse_certificate_verify(mbedtls_ssl_context *ssl,
             ssl->conf->f_ca_cb,
             ssl->conf->p_ca_cb,
             ssl->conf->cert_profile,
-            ssl->hostname,
+            hostname,
             &ssl->session_negotiate->verify_result,
             f_vrfy, p_vrfy);
     } else
@@ -2604,7 +2721,7 @@ static int ssl_parse_certificate_verify(mbedtls_ssl_context *ssl,
             chain,
             ca_chain, ca_crl,
             ssl->conf->cert_profile,
-            ssl->hostname,
+            hostname,
             &ssl->session_negotiate->verify_result,
             f_vrfy, p_vrfy, rs_ctx);
     }
@@ -3036,7 +3153,7 @@ static void ssl_update_checksum_sha384(mbedtls_ssl_context *ssl,
 #endif /* MBEDTLS_SSL_PROTO_TLS1_2 */
 
 #if defined(MBEDTLS_SSL_PROTO_SSL3)
-static void ssl_calc_finished_ssl(
+static int ssl_calc_finished_ssl(
     mbedtls_ssl_context *ssl, unsigned char *buf, int from)
 {
     const char *sender;
@@ -3118,11 +3235,13 @@ static void ssl_calc_finished_ssl(
     mbedtls_platform_zeroize(sha1sum, sizeof(sha1sum));
 
     MBEDTLS_SSL_DEBUG_MSG(2, ("<= calc  finished"));
+
+    return 0;
 }
 #endif /* MBEDTLS_SSL_PROTO_SSL3 */
 
 #if defined(MBEDTLS_SSL_PROTO_TLS1) || defined(MBEDTLS_SSL_PROTO_TLS1_1)
-static void ssl_calc_finished_tls(
+static int ssl_calc_finished_tls(
     mbedtls_ssl_context *ssl, unsigned char *buf, int from)
 {
     int len = 12;
@@ -3178,12 +3297,14 @@ static void ssl_calc_finished_tls(
     mbedtls_platform_zeroize(padbuf, sizeof(padbuf));
 
     MBEDTLS_SSL_DEBUG_MSG(2, ("<= calc  finished"));
+
+    return 0;
 }
 #endif /* MBEDTLS_SSL_PROTO_TLS1 || MBEDTLS_SSL_PROTO_TLS1_1 */
 
 #if defined(MBEDTLS_SSL_PROTO_TLS1_2)
 #if defined(MBEDTLS_SHA256_C)
-static void ssl_calc_finished_tls_sha256(
+static int ssl_calc_finished_tls_sha256(
     mbedtls_ssl_context *ssl, unsigned char *buf, int from)
 {
     int len = 12;
@@ -3214,13 +3335,13 @@ static void ssl_calc_finished_tls_sha256(
     status = psa_hash_clone(&ssl->handshake->fin_sha256_psa, &sha256_psa);
     if (status != PSA_SUCCESS) {
         MBEDTLS_SSL_DEBUG_MSG(2, ("PSA hash clone failed"));
-        return;
+        return mbedtls_ssl_md_error_from_psa(status);
     }
 
     status = psa_hash_finish(&sha256_psa, padbuf, sizeof(padbuf), &hash_size);
     if (status != PSA_SUCCESS) {
         MBEDTLS_SSL_DEBUG_MSG(2, ("PSA hash finish failed"));
-        return;
+        return mbedtls_ssl_md_error_from_psa(status);
     }
     MBEDTLS_SSL_DEBUG_BUF(3, "PSA calculated padbuf", padbuf, 32);
 #else
@@ -3254,12 +3375,14 @@ static void ssl_calc_finished_tls_sha256(
     mbedtls_platform_zeroize(padbuf, sizeof(padbuf));
 
     MBEDTLS_SSL_DEBUG_MSG(2, ("<= calc  finished"));
+
+    return 0;
 }
 #endif /* MBEDTLS_SHA256_C */
 
 #if defined(MBEDTLS_SHA512_C) && !defined(MBEDTLS_SHA512_NO_SHA384)
 
-static void ssl_calc_finished_tls_sha384(
+static int ssl_calc_finished_tls_sha384(
     mbedtls_ssl_context *ssl, unsigned char *buf, int from)
 {
     int len = 12;
@@ -3290,13 +3413,13 @@ static void ssl_calc_finished_tls_sha384(
     status = psa_hash_clone(&ssl->handshake->fin_sha384_psa, &sha384_psa);
     if (status != PSA_SUCCESS) {
         MBEDTLS_SSL_DEBUG_MSG(2, ("PSA hash clone failed"));
-        return;
+        return mbedtls_ssl_md_error_from_psa(status);
     }
 
     status = psa_hash_finish(&sha384_psa, padbuf, sizeof(padbuf), &hash_size);
     if (status != PSA_SUCCESS) {
         MBEDTLS_SSL_DEBUG_MSG(2, ("PSA hash finish failed"));
-        return;
+        return mbedtls_ssl_md_error_from_psa(status);
     }
     MBEDTLS_SSL_DEBUG_BUF(3, "PSA calculated padbuf", padbuf, 48);
 #else
@@ -3341,6 +3464,8 @@ static void ssl_calc_finished_tls_sha384(
     mbedtls_platform_zeroize(padbuf, sizeof(padbuf));
 
     MBEDTLS_SSL_DEBUG_MSG(2, ("<= calc  finished"));
+
+    return 0;
 }
 #endif /* MBEDTLS_SHA512_C && !MBEDTLS_SHA512_NO_SHA384 */
 #endif /* MBEDTLS_SSL_PROTO_TLS1_2 */
@@ -3435,7 +3560,12 @@ int mbedtls_ssl_write_finished(mbedtls_ssl_context *ssl)
 
     mbedtls_ssl_update_out_pointers(ssl, ssl->transform_negotiate);
 
-    ssl->handshake->calc_finished(ssl, ssl->out_msg + 4, ssl->conf->endpoint);
+    ret = ssl->handshake->calc_finished(ssl, ssl->out_msg + 4,
+                                        ssl->conf->endpoint);
+    if (ret != 0) {
+        MBEDTLS_SSL_DEBUG_RET(1, "calc_finished", ret);
+        return ret;
+    }
 
     /*
      * RFC 5246 7.4.9 (Page 63) says 12 is the default length and ciphersuites
@@ -3564,7 +3694,11 @@ int mbedtls_ssl_parse_finished(mbedtls_ssl_context *ssl)
 #endif
     hash_len = 12;
 
-    ssl->handshake->calc_finished(ssl, buf, ssl->conf->endpoint ^ 1);
+    ret = ssl->handshake->calc_finished(ssl, buf, ssl->conf->endpoint ^ 1);
+    if (ret != 0) {
+        MBEDTLS_SSL_DEBUG_RET(1, "calc_finished", ret);
+        goto exit;
+    }
 
     if ((ret = mbedtls_ssl_read_record(ssl, 1)) != 0) {
         MBEDTLS_SSL_DEBUG_RET(1, "mbedtls_ssl_read_record", ret);
@@ -4465,6 +4599,7 @@ static void ssl_remove_psk(mbedtls_ssl_context *ssl)
                                  ssl->handshake->psk_len);
         mbedtls_free(ssl->handshake->psk);
         ssl->handshake->psk_len = 0;
+        ssl->handshake->psk = NULL;
     }
 }
 
@@ -4628,49 +4763,6 @@ void mbedtls_ssl_conf_curves(mbedtls_ssl_config *conf,
     conf->curve_list = curve_list;
 }
 #endif /* MBEDTLS_ECP_C */
-
-#if defined(MBEDTLS_X509_CRT_PARSE_C)
-int mbedtls_ssl_set_hostname(mbedtls_ssl_context *ssl, const char *hostname)
-{
-    /* Initialize to suppress unnecessary compiler warning */
-    size_t hostname_len = 0;
-
-    /* Check if new hostname is valid before
-     * making any change to current one */
-    if (hostname != NULL) {
-        hostname_len = strlen(hostname);
-
-        if (hostname_len > MBEDTLS_SSL_MAX_HOST_NAME_LEN) {
-            return MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
-        }
-    }
-
-    /* Now it's clear that we will overwrite the old hostname,
-     * so we can free it safely */
-
-    if (ssl->hostname != NULL) {
-        mbedtls_platform_zeroize(ssl->hostname, strlen(ssl->hostname));
-        mbedtls_free(ssl->hostname);
-    }
-
-    /* Passing NULL as hostname shall clear the old one */
-
-    if (hostname == NULL) {
-        ssl->hostname = NULL;
-    } else {
-        ssl->hostname = mbedtls_calloc(1, hostname_len + 1);
-        if (ssl->hostname == NULL) {
-            return MBEDTLS_ERR_SSL_ALLOC_FAILED;
-        }
-
-        memcpy(ssl->hostname, hostname, hostname_len);
-
-        ssl->hostname[hostname_len] = '\0';
-    }
-
-    return 0;
-}
-#endif /* MBEDTLS_X509_CRT_PARSE_C */
 
 #if defined(MBEDTLS_SSL_SERVER_NAME_INDICATION)
 void mbedtls_ssl_conf_sni(mbedtls_ssl_config *conf,
@@ -5217,6 +5309,12 @@ const mbedtls_ssl_session *mbedtls_ssl_get_session_pointer(const mbedtls_ssl_con
 #define SSL_SERIALIZED_SESSION_CONFIG_CRT 0
 #endif /* MBEDTLS_X509_CRT_PARSE_C */
 
+#if defined(MBEDTLS_SSL_KEEP_PEER_CERTIFICATE)
+#define SSL_SERIALIZED_SESSION_CONFIG_KEEP_PEER_CRT 1
+#else
+#define SSL_SERIALIZED_SESSION_CONFIG_KEEP_PEER_CRT 0
+#endif /* MBEDTLS_SSL_SESSION_TICKETS */
+
 #if defined(MBEDTLS_SSL_CLI_C) && defined(MBEDTLS_SSL_SESSION_TICKETS)
 #define SSL_SERIALIZED_SESSION_CONFIG_CLIENT_TICKET 1
 #else
@@ -5254,6 +5352,7 @@ const mbedtls_ssl_session *mbedtls_ssl_get_session_pointer(const mbedtls_ssl_con
 #define SSL_SERIALIZED_SESSION_CONFIG_TRUNC_HMAC_BIT    4
 #define SSL_SERIALIZED_SESSION_CONFIG_ETM_BIT           5
 #define SSL_SERIALIZED_SESSION_CONFIG_TICKET_BIT        6
+#define SSL_SERIALIZED_SESSION_CONFIG_KEEP_PEER_CRT_BIT 7
 
 #define SSL_SERIALIZED_SESSION_CONFIG_BITFLAG                           \
     ((uint16_t) (                                                      \
@@ -5265,9 +5364,11 @@ const mbedtls_ssl_session *mbedtls_ssl_get_session_pointer(const mbedtls_ssl_con
          (SSL_SERIALIZED_SESSION_CONFIG_TRUNC_HMAC << \
              SSL_SERIALIZED_SESSION_CONFIG_TRUNC_HMAC_BIT) | \
          (SSL_SERIALIZED_SESSION_CONFIG_ETM << SSL_SERIALIZED_SESSION_CONFIG_ETM_BIT) | \
-         (SSL_SERIALIZED_SESSION_CONFIG_TICKET << SSL_SERIALIZED_SESSION_CONFIG_TICKET_BIT)))
+         (SSL_SERIALIZED_SESSION_CONFIG_TICKET << SSL_SERIALIZED_SESSION_CONFIG_TICKET_BIT) | \
+         (SSL_SERIALIZED_SESSION_CONFIG_KEEP_PEER_CRT << \
+             SSL_SERIALIZED_SESSION_CONFIG_KEEP_PEER_CRT_BIT)))
 
-static unsigned char ssl_serialized_session_header[] = {
+static const unsigned char ssl_serialized_session_header[] = {
     MBEDTLS_VERSION_MAJOR,
     MBEDTLS_VERSION_MINOR,
     MBEDTLS_VERSION_PATCH,
@@ -5291,19 +5392,36 @@ static unsigned char ssl_serialized_session_header[] = {
  *                               // the setting of those compile-time
  *                               // configuration options which influence
  *                               // the structure of mbedtls_ssl_session.
- *  uint64 start_time;
- *  uint8 ciphersuite[2];        // defined by the standard
- *  uint8 compression;           // 0 or 1
- *  uint8 session_id_len;        // at most 32
- *  opaque session_id[32];
- *  opaque master[48];           // fixed length in the standard
- *  uint32 verify_result;
- *  opaque peer_cert<0..2^24-1>; // length 0 means no peer cert
- *  opaque ticket<0..2^24-1>;    // length 0 means no ticket
- *  uint32 ticket_lifetime;
- *  uint8 mfl_code;              // up to 255 according to standard
- *  uint8 trunc_hmac;            // 0 or 1
- *  uint8 encrypt_then_mac;      // 0 or 1
+ * #if defined(MBEDTLS_HAVE_TIME)
+ *     uint64 start_time;
+ * #endif
+ *     uint8 ciphersuite[2];        // defined by the standard
+ *     uint8 compression;           // 0 or 1
+ *     uint8 session_id_len;        // at most 32
+ *     opaque session_id[32];
+ *     opaque master[48];           // fixed length in the standard
+ *     uint32 verify_result;
+ * #if defined(MBEDTLS_X509_CRT_PARSE_C)
+ * #if defined(MBEDTLS_SSL_KEEP_PEER_CERTIFICATE)
+ *     opaque peer_cert<0..2^24-1>; // length 0 means no peer cert
+ * #else
+ *     uint8 peer_cert_digest_type;
+ *     opaque peer_cert_digest<0..2^8-1>
+ * #endif
+ * #endif
+ * #if defined(MBEDTLS_SSL_SESSION_TICKETS) && defined(MBEDTLS_SSL_CLI_C)
+ *     opaque ticket<0..2^24-1>;    // length 0 means no ticket
+ *     uint32 ticket_lifetime;
+ * #endif
+ * #if defined(MBEDTLS_SSL_MAX_FRAGMENT_LENGTH)
+ *     uint8 mfl_code;              // up to 255 according to standard
+ * #endif
+ * #if defined(MBEDTLS_SSL_TRUNCATED_HMAC)
+ *     uint8 trunc_hmac;            // 0 or 1
+ * #endif
+ * #if defined(MBEDTLS_SSL_ENCRYPT_THEN_MAC)
+ *     uint8 encrypt_then_mac;      // 0 or 1
+ * #endif
  *
  * The order is the same as in the definition of the structure, except
  * verify_result is put before peer_cert so that all mandatory fields come
@@ -6136,7 +6254,7 @@ void mbedtls_ssl_session_free(mbedtls_ssl_session *session)
          (SSL_SERIALIZED_CONTEXT_CONFIG_ALPN << SSL_SERIALIZED_CONTEXT_CONFIG_ALPN_BIT) | \
          0u))
 
-static unsigned char ssl_serialized_context_header[] = {
+static const unsigned char ssl_serialized_context_header[] = {
     MBEDTLS_VERSION_MAJOR,
     MBEDTLS_VERSION_MINOR,
     MBEDTLS_VERSION_PATCH,
@@ -6667,7 +6785,7 @@ static int ssl_context_load(mbedtls_ssl_context *ssl,
             /* alpn_chosen should point to an item in the configured list */
             for (cur = ssl->conf->alpn_list; *cur != NULL; cur++) {
                 if (strlen(*cur) == alpn_len &&
-                    memcmp(p, cur, alpn_len) == 0) {
+                    memcmp(p, *cur, alpn_len) == 0) {
                     ssl->alpn_chosen = *cur;
                     break;
                 }
@@ -6802,10 +6920,7 @@ void mbedtls_ssl_free(mbedtls_ssl_context *ssl)
     }
 
 #if defined(MBEDTLS_X509_CRT_PARSE_C)
-    if (ssl->hostname != NULL) {
-        mbedtls_platform_zeroize(ssl->hostname, strlen(ssl->hostname));
-        mbedtls_free(ssl->hostname);
-    }
+    mbedtls_ssl_free_hostname(ssl);
 #endif
 
 #if defined(MBEDTLS_SSL_HW_RECORD_ACCEL)
@@ -6834,7 +6949,7 @@ void mbedtls_ssl_config_init(mbedtls_ssl_config *conf)
 }
 
 #if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED)
-static int ssl_preset_default_hashes[] = {
+static const int ssl_preset_default_hashes[] = {
 #if defined(MBEDTLS_SHA512_C)
     MBEDTLS_MD_SHA512,
 #endif
@@ -6852,14 +6967,14 @@ static int ssl_preset_default_hashes[] = {
 };
 #endif
 
-static int ssl_preset_suiteb_ciphersuites[] = {
+static const int ssl_preset_suiteb_ciphersuites[] = {
     MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
     MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
     0
 };
 
 #if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED)
-static int ssl_preset_suiteb_hashes[] = {
+static const int ssl_preset_suiteb_hashes[] = {
     MBEDTLS_MD_SHA256,
     MBEDTLS_MD_SHA384,
     MBEDTLS_MD_NONE
@@ -6867,7 +6982,7 @@ static int ssl_preset_suiteb_hashes[] = {
 #endif
 
 #if defined(MBEDTLS_ECP_C)
-static mbedtls_ecp_group_id ssl_preset_suiteb_curves[] = {
+static const mbedtls_ecp_group_id ssl_preset_suiteb_curves[] = {
 #if defined(MBEDTLS_ECP_DP_SECP256R1_ENABLED)
     MBEDTLS_ECP_DP_SECP256R1,
 #endif
@@ -7545,17 +7660,8 @@ exit:
     if (status != PSA_SUCCESS) {
         mbedtls_ssl_send_alert_message(ssl, MBEDTLS_SSL_ALERT_LEVEL_FATAL,
                                        MBEDTLS_SSL_ALERT_MSG_INTERNAL_ERROR);
-        switch (status) {
-            case PSA_ERROR_NOT_SUPPORTED:
-                return MBEDTLS_ERR_MD_FEATURE_UNAVAILABLE;
-            case PSA_ERROR_BAD_STATE: /* Intentional fallthrough */
-            case PSA_ERROR_BUFFER_TOO_SMALL:
-                return MBEDTLS_ERR_MD_BAD_INPUT_DATA;
-            case PSA_ERROR_INSUFFICIENT_MEMORY:
-                return MBEDTLS_ERR_MD_ALLOC_FAILED;
-            default:
-                return MBEDTLS_ERR_MD_HW_ACCEL_FAILED;
-        }
+
+        return mbedtls_ssl_md_error_from_psa(status);
     }
     return 0;
 }

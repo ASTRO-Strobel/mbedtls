@@ -9,19 +9,7 @@
  */
 /*
  *  Copyright The Mbed TLS Contributors
- *  SPDX-License-Identifier: Apache-2.0
- *
- *  Licensed under the Apache License, Version 2.0 (the "License"); you may
- *  not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *  http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- *  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ *  SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
  */
 
 #ifndef MBEDTLS_CONFIG_H
@@ -866,6 +854,9 @@
  * contexts and therefore is a compatibility break for applications that access
  * fields of a mbedtls_ecdh_context structure directly. See also
  * MBEDTLS_ECDH_LEGACY_CONTEXT in include/mbedtls/ecdh.h.
+ *
+ * The Everest code is provided under the Apache 2.0 license only; therefore enabling this
+ * option is not compatible with taking the library under the GPL v2.0-or-later license.
  */
 //#define MBEDTLS_ECDH_VARIANT_EVEREST_ENABLED
 
@@ -1583,6 +1574,26 @@
 //#define MBEDTLS_PSA_INJECT_ENTROPY
 
 /**
+ * \def MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS
+ *
+ * Assume all buffers passed to PSA functions are owned exclusively by the
+ * PSA function and are not stored in shared memory.
+ *
+ * This option may be enabled if all buffers passed to any PSA function reside
+ * in memory that is accessible only to the PSA function during its execution.
+ *
+ * This option MUST be disabled whenever buffer arguments are in memory shared
+ * with an untrusted party, for example where arguments to PSA calls are passed
+ * across a trust boundary.
+ *
+ * \note Enabling this option reduces memory usage and code size.
+ *
+ * \note Enabling this option causes overlap of input and output buffers
+ *       not to be supported by PSA functions.
+ */
+//#define MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS
+
+/**
  * \def MBEDTLS_RSA_NO_CRT
  *
  * Do not use the Chinese Remainder Theorem
@@ -1704,6 +1715,46 @@
  *
  */
 //#define MBEDTLS_SSL_ASYNC_PRIVATE
+
+/** \def MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME
+ *
+ * In TLS clients, when a client authenticates a server through its
+ * certificate, the client normally checks three things:
+ * - the certificate chain must be valid;
+ * - the chain must start from a trusted CA;
+ * - the certificate must cover the server name that is expected by the client.
+ *
+ * Omitting any of these checks is generally insecure, and can allow a
+ * malicious server to impersonate a legitimate server.
+ *
+ * The third check may be safely skipped in some unusual scenarios,
+ * such as networks where eavesdropping is a risk but not active attacks,
+ * or a private PKI where the client equally trusts all servers that are
+ * accredited by the root CA.
+ *
+ * You should call mbedtls_ssl_set_hostname() with the expected server name
+ * before starting a TLS handshake on a client (unless the client is
+ * set up to only use PSK-based authentication, which does not rely on the
+ * host name). This configuration option controls what happens if a TLS client
+ * is configured with the authentication mode #MBEDTLS_SSL_VERIFY_REQUIRED
+ * (default), certificate authentication is enabled and the client does not
+ * call mbedtls_ssl_set_hostname():
+ *
+ * - If this option is unset (default), the connection attempt is aborted
+ *   with the error #MBEDTLS_ERR_SSL_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME.
+ * - If this option is set, the TLS library does not check the server name
+ *   that the certificate is valid for. This is the historical behavior
+ *   of Mbed TLS, but may be insecure as explained above.
+ *
+ * Enable this option for strict backward compatibility if you have
+ * determined that it is secure in the scenario where you are using
+ * Mbed TLS.
+ *
+ * \deprecated This option exists only for backward compatibility and will
+ *             be removed in the next major version of Mbed TLS.
+ *
+ */
+//#define MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME
 
 /**
  * \def MBEDTLS_SSL_CONTEXT_SERIALIZATION
@@ -2283,6 +2334,10 @@
  * considered experimental and may change in incompatible ways at any time.
  * That is, the APIs enabled by this option are not covered by the usual
  * promises of API stability.
+ *
+ * \warning In multithreaded applications, you must also enable
+ * #MBEDTLS_THREADING_C, unless only one thread ever calls PSA functions
+ * (`psa_xxx()`), including indirect calls through SSL/TLS, X.509 or PK.
  *
  * Requires: MBEDTLS_PSA_CRYPTO_C.
  *
@@ -3385,6 +3440,14 @@
  *
  * Enable the Platform Security Architecture cryptography API.
  *
+ * \note In multithreaded applications, you must enable #MBEDTLS_THREADING_C,
+ *       unless only one thread ever calls `psa_xxx()` functions.
+ *       That includes indirect calls, such as:
+ *       - indirect calls from PK, X.509 or SSL functions when
+ *         #MBEDTLS_USE_PSA_CRYPTO is enabled;
+ *       - any other call to a function that requires calling psa_crypto_init()
+ *         beforehand.
+ *
  * Module:  library/psa_crypto.c
  *
  * Requires: either MBEDTLS_CTR_DRBG_C and MBEDTLS_ENTROPY_C,
@@ -3601,11 +3664,29 @@
 /**
  * \def MBEDTLS_THREADING_C
  *
- * Enable the threading abstraction layer.
- * By default Mbed TLS assumes it is used in a non-threaded environment or that
- * contexts are not shared between threads. If you do intend to use contexts
+ * Traditionally, Mbed TLS assumes it is used in a non-threaded environment or
+ * that contexts are not shared between threads. If you do intend to use contexts
  * between threads, you will need to enable this layer to prevent race
- * conditions. See also our Knowledge Base article about threading:
+ * conditions.
+ *
+ * The PSA subsystem has an implicit shared context. Therefore, you must
+ * enable this option if more than one thread may use any part of
+ * Mbed TLS that is implemented on top of the PSA subsystem.
+ *
+ * You must enable this option in multithreaded applications where more than
+ * one thread performs any of the following operations:
+ *
+ * - Any call to a PSA function (`psa_xxx()`).
+ * - Any call to a TLS, X.509 or PK function (`mbedtls_ssl_xxx()`,
+ *   `mbedtls_x509_xxx()`, `mbedtls_pkcs7_xxx()`, `mbedtls_pk_xxx()`)
+ *   if `MBEDTLS_USE_PSA_CRYPTO` is enabled (regardless of whether individual
+ *   TLS, X.509 or PK contexts are shared between threads).
+ * - Any use of a cryptographic context if the same context is used in
+ *   multiple threads.
+ * - Any call to a function where the documentation specifies that
+ *   psa_crypto_init() must be called prior to that function.
+ *
+ * See also our Knowledge Base article about threading:
  * https://mbed-tls.readthedocs.io/en/latest/kb/development/thread-safety-and-multi-threading
  *
  * Module:  library/threading.c
@@ -4016,22 +4097,34 @@
  * Use HMAC_DRBG with the specified hash algorithm for HMAC_DRBG for the
  * PSA crypto subsystem.
  *
- * If this option is unset:
- * - If CTR_DRBG is available, the PSA subsystem uses it rather than HMAC_DRBG.
- * - Otherwise, the PSA subsystem uses HMAC_DRBG with either
- *   #MBEDTLS_MD_SHA512 or #MBEDTLS_MD_SHA256 based on availability and
- *   on unspecified heuristics.
+ * If this option is unset, the library chooses a hash (currently between
+ * #MBEDTLS_MD_SHA512 and #MBEDTLS_MD_SHA256) based on availability and
+ * unspecified heuristics.
+ *
+ * \note The PSA crypto subsystem uses the first available mechanism amongst
+ *       the following:
+ *       - #MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG if enabled;
+ *       - Entropy from #MBEDTLS_ENTROPY_C plus CTR_DRBG with AES
+ *         if #MBEDTLS_CTR_DRBG_C is enabled;
+ *       - Entropy from #MBEDTLS_ENTROPY_C plus HMAC_DRBG.
+ *
+ *       A future version may reevaluate the prioritization of DRBG mechanisms.
  */
 //#define MBEDTLS_PSA_HMAC_DRBG_MD_TYPE MBEDTLS_MD_SHA256
 
 /** \def MBEDTLS_PSA_KEY_SLOT_COUNT
- * Restrict the PSA library to supporting a maximum amount of simultaneously
- * loaded keys. A loaded key is a key stored by the PSA Crypto core as a
- * volatile key, or a persistent key which is loaded temporarily by the
- * library as part of a crypto operation in flight.
  *
- * If this option is unset, the library will fall back to a default value of
- * 32 keys.
+ * The maximum amount of PSA keys simultaneously in memory. This counts all
+ * volatile keys, plus loaded persistent keys.
+ *
+ * Currently, persistent keys do not need to be loaded all the time while
+ * a multipart operation is in progress, only while the operation is being
+ * set up. This may change in future versions of the library.
+ *
+ * Currently, the library traverses of the whole table on each access to a
+ * persistent key. Therefore large values may cause poor performance.
+ *
+ * This option has no effect when #MBEDTLS_PSA_CRYPTO_C is disabled.
  */
 //#define MBEDTLS_PSA_KEY_SLOT_COUNT 32
 

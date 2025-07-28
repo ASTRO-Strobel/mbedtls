@@ -13,19 +13,7 @@
  */
 /*
  *  Copyright The Mbed TLS Contributors
- *  SPDX-License-Identifier: Apache-2.0
- *
- *  Licensed under the Apache License, Version 2.0 (the "License"); you may
- *  not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *  http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- *  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ *  SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
  */
 
 #ifndef MBEDTLS_GCM_H
@@ -119,10 +107,9 @@ int mbedtls_gcm_setkey(mbedtls_gcm_context *ctx,
 /**
  * \brief           This function performs GCM encryption or decryption of a buffer.
  *
- * \note            For encryption, the output buffer can be the same as the
- *                  input buffer. For decryption, the output buffer cannot be
- *                  the same as input buffer. If the buffers overlap, the output
- *                  buffer must trail at least 8 Bytes behind the input buffer.
+ * \note            The output buffer \p output can be the same as the input
+ *                  buffer \p input. If \p output is greater than \p input, they
+ *                  cannot overlap.
  *
  * \warning         When this function performs a decryption, it outputs the
  *                  authentication tag and does not verify that the data is
@@ -183,9 +170,11 @@ int mbedtls_gcm_crypt_and_tag(mbedtls_gcm_context *ctx,
  * \brief           This function performs a GCM authenticated decryption of a
  *                  buffer.
  *
- * \note            For decryption, the output buffer cannot be the same as
- *                  input buffer. If the buffers overlap, the output buffer
- *                  must trail at least 8 Bytes behind the input buffer.
+ * \note            The output buffer \p output can be the same as the input
+ *                  buffer \p input. If \p output is greater than \p input, they
+ *                  cannot overlap. Implementations which require
+ *                  MBEDTLS_GCM_ALT to be enabled may not provide support for
+ *                  overlapping buffers.
  *
  * \param ctx       The GCM context. This must be initialized.
  * \param length    The length of the ciphertext to decrypt, which is also
@@ -255,9 +244,11 @@ int mbedtls_gcm_starts(mbedtls_gcm_context *ctx,
  *                  Bytes. Only the last call before calling
  *                  mbedtls_gcm_finish() can be less than 16 Bytes.
  *
- * \note            For decryption, the output buffer cannot be the same as
- *                  input buffer. If the buffers overlap, the output buffer
- *                  must trail at least 8 Bytes behind the input buffer.
+ * \note            The output buffer \p output can be the same as the input
+ *                  buffer \p input. If \p output is greater than \p input, they
+ *                  cannot overlap. Implementations which require
+ *                  MBEDTLS_GCM_ALT to be enabled may not provide support for
+ *                  overlapping buffers.
  *
  * \param ctx       The GCM context. This must be initialized.
  * \param length    The length of the input data. This must be a multiple of

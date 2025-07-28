@@ -2,19 +2,7 @@
  *  Query Mbed TLS compile time configurations from config.h
  *
  *  Copyright The Mbed TLS Contributors
- *  SPDX-License-Identifier: Apache-2.0
- *
- *  Licensed under the Apache License, Version 2.0 (the "License"); you may
- *  not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *  http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- *  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ *  SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
  */
 
 #if !defined(MBEDTLS_CONFIG_FILE)
@@ -1308,6 +1296,14 @@ int query_config(const char *config)
     }
 #endif /* MBEDTLS_PSA_INJECT_ENTROPY */
 
+#if defined(MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS)
+    if( strcmp( "MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS", config ) == 0 )
+    {
+        MACRO_EXPANSION_TO_STR( MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS );
+        return( 0 );
+    }
+#endif /* MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS */
+
 #if defined(MBEDTLS_RSA_NO_CRT)
     if( strcmp( "MBEDTLS_RSA_NO_CRT", config ) == 0 )
     {
@@ -1379,6 +1375,14 @@ int query_config(const char *config)
         return( 0 );
     }
 #endif /* MBEDTLS_SSL_ASYNC_PRIVATE */
+
+#if defined(MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME)
+    if( strcmp( "MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME", config ) == 0 )
+    {
+        MACRO_EXPANSION_TO_STR( MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME );
+        return( 0 );
+    }
+#endif /* MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME */
 
 #if defined(MBEDTLS_SSL_CONTEXT_SERIALIZATION)
     if( strcmp( "MBEDTLS_SSL_CONTEXT_SERIALIZATION", config ) == 0 )
@@ -3470,6 +3474,10 @@ void list_config(void)
     OUTPUT_MACRO_NAME_VALUE(MBEDTLS_PSA_INJECT_ENTROPY);
 #endif /* MBEDTLS_PSA_INJECT_ENTROPY */
 
+#if defined(MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS)
+    OUTPUT_MACRO_NAME_VALUE(MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS);
+#endif /* MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS */
+
 #if defined(MBEDTLS_RSA_NO_CRT)
     OUTPUT_MACRO_NAME_VALUE(MBEDTLS_RSA_NO_CRT);
 #endif /* MBEDTLS_RSA_NO_CRT */
@@ -3505,6 +3513,10 @@ void list_config(void)
 #if defined(MBEDTLS_SSL_ASYNC_PRIVATE)
     OUTPUT_MACRO_NAME_VALUE(MBEDTLS_SSL_ASYNC_PRIVATE);
 #endif /* MBEDTLS_SSL_ASYNC_PRIVATE */
+
+#if defined(MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME)
+    OUTPUT_MACRO_NAME_VALUE(MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME);
+#endif /* MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME */
 
 #if defined(MBEDTLS_SSL_CONTEXT_SERIALIZATION)
     OUTPUT_MACRO_NAME_VALUE(MBEDTLS_SSL_CONTEXT_SERIALIZATION);

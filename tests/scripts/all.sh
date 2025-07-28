@@ -3,19 +3,7 @@
 # all.sh
 #
 # Copyright The Mbed TLS Contributors
-# SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License"); you may
-# not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
 
 
 
@@ -49,11 +37,15 @@
 #   * GCC and Clang (recent enough for using ASan with gcc and MemSan with clang, or valgrind)
 #   * G++
 #   * arm-gcc and mingw-gcc
-#   * ArmCC 5 and ArmCC 6, unless invoked with --no-armcc
-#   * OpenSSL and GnuTLS command line tools, recent enough for the
-#     interoperability tests. If they don't support SSLv3 then a legacy
-#     version of these tools must be present as well (search for LEGACY
-#     below).
+#   * ArmCC 6 (aka armclang), unless invoked with --no-armcc
+#   * OpenSSL and GnuTLS command line tools, in suitable versions for the
+#     interoperability tests. The following are the official versions at the
+#     time of writing:
+#     * GNUTLS_{CLI,SERV} = 3.4.10
+#     * GNUTLS_NEXT_{CLI,SERV} = 3.7.2
+#     * OPENSSL_LEGACY = 1.0.1j
+#     * OPENSSL = 1.0.2g (without Debian/Ubuntu patches)
+#     * OPENSSL_NEXT = 1.1.1a
 # See the invocation of check_tools below for details.
 #
 # This script must be invoked from the toplevel directory of a git
@@ -83,6 +75,7 @@
 #      * component_check_XXX: quick tests that aren't worth parallelizing.
 #      * component_build_XXX: build things but don't run them.
 #      * component_test_XXX: build and test.
+#      * component_release_XXX: tests that the CI should skip during PR testing.
 #  * support_XXX: if support_XXX exists and returns false then
 #    component_XXX is not run by default.
 #  * post_XXX: things to do after running the tests.
@@ -168,13 +161,12 @@ pre_initialize_variables () {
     : ${OPENSSL_NEXT:="$OPENSSL"}
     : ${GNUTLS_CLI:="gnutls-cli"}
     : ${GNUTLS_SERV:="gnutls-serv"}
-    : ${GNUTLS_LEGACY_CLI:="$GNUTLS_CLI"}
-    : ${GNUTLS_LEGACY_SERV:="$GNUTLS_SERV"}
     : ${OUT_OF_SOURCE_DIR:=./mbedtls_out_of_source_build}
-    : ${ARMC5_BIN_DIR:=/usr/bin}
     : ${ARMC6_BIN_DIR:=/usr/bin}
     : ${ARM_NONE_EABI_GCC_PREFIX:=arm-none-eabi-}
     : ${ARM_LINUX_GNUEABI_GCC_PREFIX:=arm-linux-gnueabi-}
+    : ${ARM_LINUX_GNUEABIHF_GCC_PREFIX:=arm-linux-gnueabihf-}
+    : ${AARCH64_LINUX_GNU_GCC_PREFIX:=aarch64-linux-gnu-}
     : ${CLANG_LATEST:="clang-latest"}
     : ${CLANG_EARLIEST:="clang-earliest"}
     : ${GCC_LATEST:="gcc-latest"}
@@ -183,6 +175,10 @@ pre_initialize_variables () {
     # if MAKEFLAGS is not set add the -j option to speed up invocations of make
     if [ -z "${MAKEFLAGS+set}" ]; then
         export MAKEFLAGS="-j$(all_sh_nproc)"
+    fi
+    # if CC is not set, use clang by default (if present) to improve build times
+    if [ -z "${CC+set}" ] && (type clang > /dev/null 2>&1); then
+        export CC="clang"
     fi
 
     # Include more verbose output for failing tests run by CMake or make
@@ -200,15 +196,19 @@ pre_initialize_variables () {
     # defined in this script whose name starts with "component_".
     ALL_COMPONENTS=$(compgen -A function component_ | sed 's/component_//')
 
-    # Exclude components that are not supported on this platform.
-    SUPPORTED_COMPONENTS=
-    for component in $ALL_COMPONENTS; do
-        case $(type "support_$component" 2>&1) in
-            *' function'*)
-                if ! support_$component; then continue; fi;;
-        esac
-        SUPPORTED_COMPONENTS="$SUPPORTED_COMPONENTS $component"
-    done
+    # Delay determining SUPPORTED_COMPONENTS until the command line options have a chance to override
+    # the commands set by the environment
+}
+
+setup_quiet_wrappers()
+{
+    # Pick up "quiet" wrappers for make and cmake, which don't output very much
+    # unless there is an error. This reduces logging overhead in the CI.
+    #
+    # Note that the cmake wrapper breaks unless we use an absolute path here.
+    if [[ -e ${PWD}/tests/scripts/quiet ]]; then
+        export PATH=${PWD}/tests/scripts/quiet:$PATH
+    fi
 }
 
 # Test whether the component $1 is included in the command line patterns.
@@ -256,6 +256,12 @@ General options:
      --arm-linux-gnueabi-gcc-prefix=<string>
                         Prefix for a cross-compiler for arm-linux-gnueabi
                         (default: "${ARM_LINUX_GNUEABI_GCC_PREFIX}")
+     --arm-linux-gnueabihf-gcc-prefix=<string>
+                        Prefix for a cross-compiler for arm-linux-gnueabihf
+                        (default: "${ARM_LINUX_GNUEABIHF_GCC_PREFIX}")
+     --aarch64-linux-gnu-gcc-prefix=<string>
+                        Prefix for a cross-compiler for aarch64-linux-gnu
+                        (default: "${AARCH64_LINUX_GNU_GCC_PREFIX}")
      --armcc            Run ARM Compiler builds (on by default).
      --restore          First clean up the build tree, restoring backed up
                         files. Do not run any components unless they are
@@ -278,7 +284,6 @@ General options:
   -s|--seed             Integer seed value to use for this test run.
 
 Tool path options:
-     --armc5-bin-dir=<ARMC5_bin_dir_path>       ARM Compiler 5 bin directory.
      --armc6-bin-dir=<ARMC6_bin_dir_path>       ARM Compiler 6 bin directory.
      --clang-earliest=<Clang_earliest_path>     Earliest version of clang available
      --clang-latest=<Clang_latest_path>         Latest version of clang available
@@ -286,8 +291,6 @@ Tool path options:
      --gcc-latest=<GCC_latest_path>             Latest version of GCC available
      --gnutls-cli=<GnuTLS_cli_path>             GnuTLS client executable to use for most tests.
      --gnutls-serv=<GnuTLS_serv_path>           GnuTLS server executable to use for most tests.
-     --gnutls-legacy-cli=<GnuTLS_cli_path>      GnuTLS client executable to use for legacy tests.
-     --gnutls-legacy-serv=<GnuTLS_serv_path>    GnuTLS server executable to use for legacy tests.
      --openssl=<OpenSSL_path>                   OpenSSL executable to use for most tests.
      --openssl-legacy=<OpenSSL_path>            OpenSSL executable to use for legacy tests e.g. SSLv3.
      --openssl-next=<OpenSSL_path>              OpenSSL executable to use for recent things like ARIA
@@ -307,8 +310,9 @@ cleanup()
            \( -iname cmake_install.cmake -o \
               -iname CTestTestfile.cmake -o \
               -iname CMakeCache.txt \) -exec rm {} \+
-    # Recover files overwritten by in-tree CMake builds
-    rm -f include/Makefile include/mbedtls/Makefile programs/!(fuzz)/Makefile
+    # Remove Makefiles generated by in-tree CMake builds
+    rm -f 3rdparty/Makefile 3rdparty/*/Makefile pkgconfig/Makefile
+    rm -f include/Makefile programs/!(fuzz)/Makefile
 
     # Remove any artifacts from the component_test_cmake_as_subdirectory test.
     rm -rf programs/test/cmake_subproject/build
@@ -413,6 +417,7 @@ pre_parse_command_line () {
     COMMAND_LINE_COMPONENTS=
     all_except=0
     error_test=0
+    list_components=0
     restore_first=0
     no_armcc=
 
@@ -424,8 +429,9 @@ pre_parse_command_line () {
             --append-outcome) append_outcome=1;;
             --arm-none-eabi-gcc-prefix) shift; ARM_NONE_EABI_GCC_PREFIX="$1";;
             --arm-linux-gnueabi-gcc-prefix) shift; ARM_LINUX_GNUEABI_GCC_PREFIX="$1";;
+            --arm-linux-gnueabihf-gcc-prefix) shift; ARM_LINUX_GNUEABIHF_GCC_PREFIX="$1";;
+            --aarch64-linux-gnu-gcc-prefix) shift; AARCH64_LINUX_GNU_GCC_PREFIX="$1";;
             --armcc) no_armcc=;;
-            --armc5-bin-dir) shift; ARMC5_BIN_DIR="$1";;
             --armc6-bin-dir) shift; ARMC6_BIN_DIR="$1";;
             --clang-earliest) shift; CLANG_EARLIEST="$1";;
             --clang-latest) shift; CLANG_LATEST="$1";;
@@ -435,13 +441,13 @@ pre_parse_command_line () {
             --gcc-earliest) shift; GCC_EARLIEST="$1";;
             --gcc-latest) shift; GCC_LATEST="$1";;
             --gnutls-cli) shift; GNUTLS_CLI="$1";;
-            --gnutls-legacy-cli) shift; GNUTLS_LEGACY_CLI="$1";;
-            --gnutls-legacy-serv) shift; GNUTLS_LEGACY_SERV="$1";;
+            --gnutls-legacy-cli) shift;; # ignored for backward compatibility
+            --gnutls-legacy-serv) shift;; # ignored for backward compatibility
             --gnutls-serv) shift; GNUTLS_SERV="$1";;
             --help|-h) usage; exit;;
             --keep-going|-k) KEEP_GOING=1;;
             --list-all-components) printf '%s\n' $ALL_COMPONENTS; exit;;
-            --list-components) printf '%s\n' $SUPPORTED_COMPONENTS; exit;;
+            --list-components) list_components=1;;
             --memory|-m) MEMORY=1;;
             --no-append-outcome) append_outcome=0;;
             --no-armcc) no_armcc=1;;
@@ -468,6 +474,21 @@ pre_parse_command_line () {
         esac
         shift
     done
+
+    # Exclude components that are not supported on this platform.
+    SUPPORTED_COMPONENTS=
+    for component in $ALL_COMPONENTS; do
+        case $(type "support_$component" 2>&1) in
+            *' function'*)
+                if ! support_$component; then continue; fi;;
+        esac
+        SUPPORTED_COMPONENTS="$SUPPORTED_COMPONENTS $component"
+    done
+
+    if [ $list_components -eq 1 ]; then
+        printf '%s\n' $SUPPORTED_COMPONENTS
+        exit
+    fi
 
     # With no list of components, run everything.
     if [ -z "$COMMAND_LINE_COMPONENTS" ] && [ $restore_first -eq 0 ]; then
@@ -709,9 +730,6 @@ pre_print_configuration () {
     echo "OPENSSL_NEXT: $OPENSSL_NEXT"
     echo "GNUTLS_CLI: $GNUTLS_CLI"
     echo "GNUTLS_SERV: $GNUTLS_SERV"
-    echo "GNUTLS_LEGACY_CLI: $GNUTLS_LEGACY_CLI"
-    echo "GNUTLS_LEGACY_SERV: $GNUTLS_LEGACY_SERV"
-    echo "ARMC5_BIN_DIR: $ARMC5_BIN_DIR"
     echo "ARMC6_BIN_DIR: $ARMC6_BIN_DIR"
 }
 
@@ -724,7 +742,7 @@ pre_check_tools () {
         # Require OpenSSL and GnuTLS if running any tests (as opposed to
         # only doing builds). Not all tests run OpenSSL and GnuTLS, but this
         # is a good enough approximation in practice.
-        *" test_"*)
+        *" test_"* | *" release_test_"*)
             # To avoid setting OpenSSL and GnuTLS for each call to compat.sh
             # and ssl-opt.sh, we just export the variables they require.
             export OPENSSL="$OPENSSL"
@@ -736,11 +754,8 @@ pre_check_tools () {
             fi
             set "$@" OPENSSL="$OPENSSL" OPENSSL_LEGACY="$OPENSSL_LEGACY"
             set "$@" GNUTLS_CLI="$GNUTLS_CLI" GNUTLS_SERV="$GNUTLS_SERV"
-            set "$@" GNUTLS_LEGACY_CLI="$GNUTLS_LEGACY_CLI"
-            set "$@" GNUTLS_LEGACY_SERV="$GNUTLS_LEGACY_SERV"
             check_tools "$OPENSSL" "$OPENSSL_LEGACY" "$OPENSSL_NEXT" \
-                        "$GNUTLS_CLI" "$GNUTLS_SERV" \
-                        "$GNUTLS_LEGACY_CLI" "$GNUTLS_LEGACY_SERV"
+                        "$GNUTLS_CLI" "$GNUTLS_SERV"
             ;;
     esac
 
@@ -762,14 +777,10 @@ pre_check_tools () {
 
     case " $RUN_COMPONENTS " in
         *_armcc*)
-            ARMC5_CC="$ARMC5_BIN_DIR/armcc"
-            ARMC5_AR="$ARMC5_BIN_DIR/armar"
-            ARMC5_FROMELF="$ARMC5_BIN_DIR/fromelf"
             ARMC6_CC="$ARMC6_BIN_DIR/armclang"
             ARMC6_AR="$ARMC6_BIN_DIR/armar"
             ARMC6_FROMELF="$ARMC6_BIN_DIR/fromelf"
-            check_tools "$ARMC5_CC" "$ARMC5_AR" "$ARMC5_FROMELF" \
-                        "$ARMC6_CC" "$ARMC6_AR" "$ARMC6_FROMELF";;
+            check_tools "$ARMC6_CC" "$ARMC6_AR" "$ARMC6_FROMELF";;
     esac
 
     # past this point, no call to check_tool, only printing output
@@ -780,10 +791,70 @@ pre_check_tools () {
     msg "info: output_env.sh"
     case $RUN_COMPONENTS in
         *_armcc*)
-            set "$@" ARMC5_CC="$ARMC5_CC" ARMC6_CC="$ARMC6_CC" RUN_ARMCC=1;;
+            set "$@" ARMC6_CC="$ARMC6_CC" RUN_ARMCC=1;;
         *) set "$@" RUN_ARMCC=0;;
     esac
     "$@" scripts/output_env.sh
+}
+
+gcc_version() {
+    gcc="$1"
+    if command -v "$gcc" > /dev/null ; then
+        "$gcc" --version | sed -En '1s/^[^ ]* \([^)]*\) ([0-9]+).*/\1/p'
+    else
+        echo 0  # report version 0 for "no gcc"
+    fi
+}
+
+can_run_cc_output() {
+    cc="$1"
+    result=false
+    if type "$cc" >/dev/null 2>&1; then
+        testbin=$(mktemp)
+        if echo 'int main(void){return 0;}' | "$cc" -o "$testbin" -x c -; then
+            if "$testbin" 2>/dev/null; then
+                result=true
+            fi
+        fi
+        rm -f "$testbin"
+    fi
+    $result
+}
+
+can_run_arm_linux_gnueabi=
+can_run_arm_linux_gnueabi () {
+    if [ -z "$can_run_arm_linux_gnueabi" ]; then
+        if can_run_cc_output "${ARM_LINUX_GNUEABI_GCC_PREFIX}gcc"; then
+            can_run_arm_linux_gnueabi=true
+        else
+            can_run_arm_linux_gnueabi=false
+        fi
+    fi
+    $can_run_arm_linux_gnueabi
+}
+
+can_run_arm_linux_gnueabihf=
+can_run_arm_linux_gnueabihf () {
+    if [ -z "$can_run_arm_linux_gnueabihf" ]; then
+        if can_run_cc_output "${ARM_LINUX_GNUEABIHF_GCC_PREFIX}gcc"; then
+            can_run_arm_linux_gnueabihf=true
+        else
+            can_run_arm_linux_gnueabihf=false
+        fi
+    fi
+    $can_run_arm_linux_gnueabihf
+}
+
+can_run_aarch64_linux_gnu=
+can_run_aarch64_linux_gnu () {
+    if [ -z "$can_run_aarch64_linux_gnu" ]; then
+        if can_run_cc_output "${AARCH64_LINUX_GNU_GCC_PREFIX}gcc"; then
+            can_run_aarch64_linux_gnu=true
+        else
+            can_run_aarch64_linux_gnu=false
+        fi
+    fi
+    $can_run_aarch64_linux_gnu
 }
 
 
@@ -873,6 +944,16 @@ component_test_default_out_of_box () {
 
     msg "selftest: make, default config (out-of-box)" # ~10s
     programs/test/selftest
+
+    msg "program demos: make, default config (out-of-box)" # ~10s
+    tests/scripts/run_demos.py
+}
+
+component_build_without_check_config () {
+    msg "build: full without check_config.h"
+    scripts/config.py full
+    sed -i '/#include.*check_config\.h/ s!^!//!' "$CONFIG_H"
+    make
 }
 
 component_test_default_cmake_gcc_asan () {
@@ -883,8 +964,14 @@ component_test_default_cmake_gcc_asan () {
     msg "test: main suites (inc. selftests) (ASan build)" # ~ 50s
     make test
 
+    msg "program demos (ASan build)" # ~10s
+    tests/scripts/run_demos.py
+
     msg "test: selftest (ASan build)" # ~ 10s
     programs/test/selftest
+
+    msg "test: metatests (GCC, ASan build)"
+    tests/scripts/run-metatests.sh any asan poison
 
     msg "test: ssl-opt.sh (ASan build)" # ~ 1 min
     tests/ssl-opt.sh
@@ -911,8 +998,18 @@ component_test_full_cmake_gcc_asan () {
     msg "test: ssl-opt.sh (full config, ASan build)"
     tests/ssl-opt.sh
 
-    msg "test: compat.sh (full config, ASan build)"
-    tests/compat.sh
+    msg "test: compat.sh all except legacy/next (full config, ASan build)"
+    tests/compat.sh -e '^DES-CBC-\|-DES-CBC-\|ARIA\|CHACHA' \
+        -m 'ssl3 tls1 tls1_1 tls12 dtls1 dtls12'
+
+    msg "test: compat.sh single-DES (full config, ASan build)"
+    env OPENSSL="$OPENSSL_LEGACY" tests/compat.sh -e '^$' -f '^DES-CBC\|-DES-CBC-' \
+        -m 'ssl3 tls1 tls1_1 tls12 dtls1 dtls12'
+
+    # ARIA and ChachaPoly are both (D)TLS 1.2 only
+    msg "test: compat.sh ARIA + ChachaPoly (full config, ASan build)"
+    env OPENSSL="$OPENSSL_NEXT" tests/compat.sh -e '^$' -f 'ARIA\|CHACHA' \
+        -m 'tls12 dtls12'
 
     msg "test: context-info.sh (full config, ASan build)" # ~ 15 sec
     tests/context-info.sh
@@ -927,6 +1024,17 @@ component_test_psa_crypto_key_id_encodes_owner () {
     make
 
     msg "test: full config - USE_PSA_CRYPTO + PSA_CRYPTO_KEY_ID_ENCODES_OWNER, cmake, gcc, ASan"
+    make test
+}
+
+component_test_psa_assume_exclusive_buffers () {
+    msg "build: full config + MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS, cmake, gcc, ASan"
+    scripts/config.py full
+    scripts/config.py set MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS
+    CC=gcc cmake -D CMAKE_BUILD_TYPE:String=Asan .
+    make
+
+    msg "test: full config + MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS, cmake, gcc, ASan"
     make test
 }
 
@@ -991,6 +1099,9 @@ EOF
 }
 
 component_test_zlib_cmake() {
+    # This is needed due to something parsing the output from make
+    export VERBOSE_LOGS=1
+
     msg "build: zlib enabled, cmake"
     scripts/config.py set MBEDTLS_ZLIB_SUPPORT
     cmake -D ENABLE_ZLIB_SUPPORT=On -D CMAKE_BUILD_TYPE:String=Release .
@@ -1031,8 +1142,7 @@ component_test_sslv3 () {
     make test
 
     msg "build: SSLv3 - compat.sh (ASan build)" # ~ 6 min
-    tests/compat.sh -m 'tls1 tls1_1 tls12 dtls1 dtls12'
-    env OPENSSL="$OPENSSL_LEGACY" tests/compat.sh -m 'ssl3'
+    tests/compat.sh -m 'ssl3 tls1 tls1_1 tls12 dtls1 dtls12'
 
     msg "build: SSLv3 - ssl-opt.sh (ASan build)" # ~ 6 min
     tests/ssl-opt.sh
@@ -1494,6 +1604,9 @@ component_test_everest () {
     msg "test: Everest ECDH context - main suites (inc. selftests) (ASan build)" # ~ 50s
     make test
 
+    msg "test: metatests (clang, ASan)"
+    tests/scripts/run-metatests.sh any asan poison
+
     msg "test: Everest ECDH context - ECDH-related part of ssl-opt.sh (ASan build)" # ~ 5s
     tests/ssl-opt.sh -f ECDH
 
@@ -1584,17 +1697,17 @@ component_test_full_cmake_clang () {
     msg "test: cpp_dummy_build (full config, clang)" # ~ 1s
     programs/test/cpp_dummy_build
 
+    msg "test: metatests (clang)"
+    tests/scripts/run-metatests.sh any pthread
+
+    msg "program demos (full config, clang)" # ~10s
+    tests/scripts/run_demos.py
+
     msg "test: psa_constant_names (full config, clang)" # ~ 1s
     tests/scripts/test_psa_constant_names.py
 
     msg "test: ssl-opt.sh default, ECJPAKE, SSL async (full config)" # ~ 1s
     tests/ssl-opt.sh -f 'Default\|ECJPAKE\|SSL async private'
-
-    msg "test: compat.sh RC4, DES, 3DES & NULL (full config)" # ~ 2 min
-    env OPENSSL="$OPENSSL_LEGACY" GNUTLS_CLI="$GNUTLS_LEGACY_CLI" GNUTLS_SERV="$GNUTLS_LEGACY_SERV" tests/compat.sh -e '^$' -f 'NULL\|DES\|RC4\|ARCFOUR'
-
-    msg "test: compat.sh ARIA + ChachaPoly"
-    env OPENSSL="$OPENSSL_NEXT" tests/compat.sh -e '^$' -f 'ARIA\|CHACHA'
 }
 
 skip_suites_without_constant_flow () {
@@ -1626,7 +1739,7 @@ component_test_memsan_constant_flow () {
     make test
 }
 
-component_test_valgrind_constant_flow () {
+component_release_test_valgrind_constant_flow () {
     # This tests both (1) everything that valgrind's memcheck usually checks
     # (heap buffer overflows, use of uninitialized memory, use-after-free,
     # etc.) and (2) branches or memory access depending on secret values,
@@ -1654,7 +1767,7 @@ component_test_default_no_deprecated () {
     # configuration leaves something consistent.
     msg "build: make, default + MBEDTLS_DEPRECATED_REMOVED" # ~ 30s
     scripts/config.py set MBEDTLS_DEPRECATED_REMOVED
-    make CC=gcc CFLAGS='-O -Werror -Wall -Wextra'
+    make CFLAGS='-O -Werror -Wall -Wextra'
 
     msg "test: make, default + MBEDTLS_DEPRECATED_REMOVED" # ~ 5s
     make test
@@ -1663,10 +1776,13 @@ component_test_default_no_deprecated () {
 component_test_full_no_deprecated () {
     msg "build: make, full_no_deprecated config" # ~ 30s
     scripts/config.py full_no_deprecated
-    make CC=gcc CFLAGS='-O -Werror -Wall -Wextra'
+    make CFLAGS='-O -Werror -Wall -Wextra'
 
     msg "test: make, full_no_deprecated config" # ~ 5s
     make test
+
+    msg "test: ssl-opt.sh authentication, full_no_deprecated config" # ~ 10s
+    tests/ssl-opt.sh -f 'Default\|Authentication'
 }
 
 component_test_full_no_deprecated_deprecated_warning () {
@@ -1677,7 +1793,7 @@ component_test_full_no_deprecated_deprecated_warning () {
     scripts/config.py full_no_deprecated
     scripts/config.py unset MBEDTLS_DEPRECATED_REMOVED
     scripts/config.py set MBEDTLS_DEPRECATED_WARNING
-    make CC=gcc CFLAGS='-O -Werror -Wall -Wextra'
+    make CFLAGS='-O -Werror -Wall -Wextra'
 
     msg "test: make, full_no_deprecated config, MBEDTLS_DEPRECATED_WARNING" # ~ 5s
     make test
@@ -1690,6 +1806,8 @@ component_test_full_deprecated_warning () {
     scripts/config.py full
     scripts/config.py set MBEDTLS_DEPRECATED_WARNING
     # Expect warnings from '#warning' directives in check_config.h.
+    # Note that gcc is required to allow the use of -Wno-error=cpp, which allows us to
+    # display #warning messages without them being treated as errors.
     make CC=gcc CFLAGS='-O -Werror -Wall -Wextra -Wno-error=cpp' lib programs
 
     msg "build: make tests, full config + MBEDTLS_DEPRECATED_WARNING, expect warnings" # ~ 30s
@@ -1701,6 +1819,9 @@ component_test_full_deprecated_warning () {
 
     msg "test: full config + MBEDTLS_TEST_DEPRECATED" # ~ 30s
     make test
+
+    msg "program demos: full config + MBEDTLS_TEST_DEPRECATED" # ~10s
+    tests/scripts/run_demos.py
 }
 
 # Check that the specified libraries exist and are empty.
@@ -1856,7 +1977,7 @@ component_build_no_pk_rsa_alt_support () {
     scripts/config.py set MBEDTLS_X509_CRT_WRITE_C
 
     # Only compile - this is primarily to test for compile issues
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra -I../tests/include/alt-dummy'
+    make CFLAGS='-Werror -Wall -Wextra -I../tests/include/alt-dummy'
 }
 
 component_test_no_use_psa_crypto_full_cmake_asan() {
@@ -1878,14 +1999,18 @@ component_test_no_use_psa_crypto_full_cmake_asan() {
     msg "test: ssl-opt.sh (full minus MBEDTLS_USE_PSA_CRYPTO)"
     tests/ssl-opt.sh
 
-    msg "test: compat.sh default (full minus MBEDTLS_USE_PSA_CRYPTO)"
-    tests/compat.sh
+    msg "test: compat.sh all except legacy/next (full minus MBEDTLS_USE_PSA_CRYPTO)"
+    tests/compat.sh -e '^DES-CBC-\|-DES-CBC-\|ARIA\|CHACHA' \
+        -m 'ssl3 tls1 tls1_1 tls12 dtls1 dtls12'
 
-    msg "test: compat.sh RC4, DES & NULL (full minus MBEDTLS_USE_PSA_CRYPTO)"
-    env OPENSSL="$OPENSSL_LEGACY" GNUTLS_CLI="$GNUTLS_LEGACY_CLI" GNUTLS_SERV="$GNUTLS_LEGACY_SERV" tests/compat.sh -e '3DES\|DES-CBC3' -f 'NULL\|DES\|RC4\|ARCFOUR'
+    msg "test: compat.sh single-DES (full minus MBEDTLS_USE_PSA_CRYPTO)"
+    env OPENSSL="$OPENSSL_LEGACY" tests/compat.sh -e '^$' -f '^DES-CBC\|-DES-CBC-' \
+        -m 'ssl3 tls1 tls1_1 tls12 dtls1 dtls12'
 
+    # ARIA and ChachaPoly are both (D)TLS 1.2 only
     msg "test: compat.sh ARIA + ChachaPoly (full minus MBEDTLS_USE_PSA_CRYPTO)"
-    env OPENSSL="$OPENSSL_NEXT" tests/compat.sh -e '^$' -f 'ARIA\|CHACHA'
+    env OPENSSL="$OPENSSL_NEXT" tests/compat.sh -e '^$' -f 'ARIA\|CHACHA' \
+        -m 'tls12 dtls12'
 }
 
 component_test_psa_crypto_config_accel_ecdsa () {
@@ -2080,7 +2205,7 @@ component_test_psa_crypto_config_accel_cipher () {
     loc_accel_flags="$loc_accel_flags $( echo "$loc_accel_list" | sed 's/[^ ]* */-DMBEDTLS_PSA_ACCEL_&/g' )"
     make CFLAGS="$ASAN_CFLAGS -Werror -I../tests/include -I../tests -DPSA_CRYPTO_DRIVER_TEST -DMBEDTLS_TEST_LIBTESTDRIVER1 $loc_accel_flags" LDFLAGS="-ltestdriver1 $ASAN_CFLAGS"
 
-    not grep mbedtls_des* library/des.o
+    not grep mbedtls_des library/des.o
 
     msg "test: MBEDTLS_PSA_CRYPTO_CONFIG with accelerated hash"
     make test
@@ -2555,22 +2680,14 @@ component_test_no_platform () {
     # This should catch missing mbedtls_printf definitions, and by disabling file
     # IO, it should catch missing '#include <stdio.h>'
     msg "build: full config except platform/fsio/net, make, gcc, C99" # ~ 30s
-    scripts/config.py full
+    scripts/config.py full_no_platform
     scripts/config.py unset MBEDTLS_PLATFORM_C
     scripts/config.py unset MBEDTLS_NET_C
-    scripts/config.py unset MBEDTLS_PLATFORM_MEMORY
-    scripts/config.py unset MBEDTLS_PLATFORM_PRINTF_ALT
-    scripts/config.py unset MBEDTLS_PLATFORM_FPRINTF_ALT
-    scripts/config.py unset MBEDTLS_PLATFORM_SNPRINTF_ALT
-    scripts/config.py unset MBEDTLS_PLATFORM_VSNPRINTF_ALT
-    scripts/config.py unset MBEDTLS_PLATFORM_TIME_ALT
-    scripts/config.py unset MBEDTLS_PLATFORM_EXIT_ALT
-    scripts/config.py unset MBEDTLS_PLATFORM_NV_SEED_ALT
-    scripts/config.py unset MBEDTLS_ENTROPY_NV_SEED
     scripts/config.py unset MBEDTLS_FS_IO
     scripts/config.py unset MBEDTLS_PSA_CRYPTO_SE_C
     scripts/config.py unset MBEDTLS_PSA_CRYPTO_STORAGE_C
     scripts/config.py unset MBEDTLS_PSA_ITS_FILE_C
+    scripts/config.py unset MBEDTLS_ENTROPY_NV_SEED
     # Note, _DEFAULT_SOURCE needs to be defined for platforms using glibc version >2.19,
     # to re-enable platform integration features otherwise disabled in C99 builds
     make CC=gcc CFLAGS='-Werror -Wall -Wextra -std=c99 -pedantic -Os -D_DEFAULT_SOURCE' lib programs
@@ -2618,7 +2735,7 @@ component_test_memory_buffer_allocator_backtrace () {
     scripts/config.py set MBEDTLS_PLATFORM_MEMORY
     scripts/config.py set MBEDTLS_MEMORY_BACKTRACE
     scripts/config.py set MBEDTLS_MEMORY_DEBUG
-    CC=gcc cmake -DCMAKE_BUILD_TYPE:String=Release .
+    cmake -DCMAKE_BUILD_TYPE:String=Release .
     make
 
     msg "test: MBEDTLS_MEMORY_BUFFER_ALLOC_C and MBEDTLS_MEMORY_BACKTRACE"
@@ -2629,7 +2746,7 @@ component_test_memory_buffer_allocator () {
     msg "build: default config with memory buffer allocator"
     scripts/config.py set MBEDTLS_MEMORY_BUFFER_ALLOC_C
     scripts/config.py set MBEDTLS_PLATFORM_MEMORY
-    CC=gcc cmake -DCMAKE_BUILD_TYPE:String=Release .
+    cmake -DCMAKE_BUILD_TYPE:String=Release .
     make
 
     msg "test: MBEDTLS_MEMORY_BUFFER_ALLOC_C"
@@ -2744,7 +2861,7 @@ component_test_ssl_alloc_buffer_and_mfl () {
     scripts/config.py set MBEDTLS_MEMORY_DEBUG
     scripts/config.py set MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
     scripts/config.py set MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH
-    CC=gcc cmake -DCMAKE_BUILD_TYPE:String=Release .
+    cmake -DCMAKE_BUILD_TYPE:String=Release .
     make
 
     msg "test: MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH, MBEDTLS_MEMORY_BUFFER_ALLOC_C, MBEDTLS_MEMORY_DEBUG and MBEDTLS_SSL_MAX_FRAGMENT_LENGTH"
@@ -2844,7 +2961,7 @@ component_test_malloc_0_null () {
 component_test_aes_fewer_tables () {
     msg "build: default config with AES_FEWER_TABLES enabled"
     scripts/config.py set MBEDTLS_AES_FEWER_TABLES
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra'
+    make CFLAGS='-O2 -Werror -Wall -Wextra'
 
     msg "test: AES_FEWER_TABLES"
     make test
@@ -2853,7 +2970,7 @@ component_test_aes_fewer_tables () {
 component_test_aes_rom_tables () {
     msg "build: default config with AES_ROM_TABLES enabled"
     scripts/config.py set MBEDTLS_AES_ROM_TABLES
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra'
+    make CFLAGS='-O2 -Werror -Wall -Wextra'
 
     msg "test: AES_ROM_TABLES"
     make test
@@ -2863,7 +2980,7 @@ component_test_aes_fewer_tables_and_rom_tables () {
     msg "build: default config with AES_ROM_TABLES and AES_FEWER_TABLES enabled"
     scripts/config.py set MBEDTLS_AES_FEWER_TABLES
     scripts/config.py set MBEDTLS_AES_ROM_TABLES
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra'
+    make CFLAGS='-O2 -Werror -Wall -Wextra'
 
     msg "test: AES_FEWER_TABLES + AES_ROM_TABLES"
     make test
@@ -2979,7 +3096,7 @@ support_test_clang_latest_opt () {
 
 component_test_clang_earliest_opt () {
     scripts/config.py full
-    test_build_opt 'full config' "$CLANG_EARLIEST" -O0
+    test_build_opt 'full config' "$CLANG_EARLIEST" -O2
 }
 support_test_clang_earliest_opt () {
     type "$CLANG_EARLIEST" >/dev/null 2>/dev/null
@@ -2995,7 +3112,7 @@ support_test_gcc_latest_opt () {
 
 component_test_gcc_earliest_opt () {
     scripts/config.py full
-    test_build_opt 'full config' "$GCC_EARLIEST" -O0
+    test_build_opt 'full config' "$GCC_EARLIEST" -O2
 }
 support_test_gcc_earliest_opt () {
     type "$GCC_EARLIEST" >/dev/null 2>/dev/null
@@ -3098,7 +3215,7 @@ support_test_m32_everest () {
 component_test_mx32 () {
     msg "build: 64-bit ILP32, make, gcc" # ~ 30s
     scripts/config.py full
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra -mx32' LDFLAGS='-mx32'
+    make CC=gcc CFLAGS='-O2 -Werror -Wall -Wextra -mx32' LDFLAGS='-mx32'
 
     msg "test: 64-bit ILP32, make, gcc"
     make test
@@ -3125,7 +3242,7 @@ component_test_have_int32 () {
     scripts/config.py unset MBEDTLS_HAVE_ASM
     scripts/config.py unset MBEDTLS_AESNI_C
     scripts/config.py unset MBEDTLS_PADLOCK_C
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra -DMBEDTLS_HAVE_INT32'
+    make CC=gcc CFLAGS='-O2 -Werror -Wall -Wextra -DMBEDTLS_HAVE_INT32'
 
     msg "test: gcc, force 32-bit bignum limbs"
     make test
@@ -3136,7 +3253,7 @@ component_test_have_int64 () {
     scripts/config.py unset MBEDTLS_HAVE_ASM
     scripts/config.py unset MBEDTLS_AESNI_C
     scripts/config.py unset MBEDTLS_PADLOCK_C
-    make CC=gcc CFLAGS='-Werror -Wall -Wextra -DMBEDTLS_HAVE_INT64'
+    make CC=gcc CFLAGS='-O2 -Werror -Wall -Wextra -DMBEDTLS_HAVE_INT64'
 
     msg "test: gcc, force 64-bit bignum limbs"
     make test
@@ -3174,6 +3291,118 @@ component_test_no_strings () {
 
     msg "test: no strings" # ~ 10s
     make test
+}
+
+component_test_arm_linux_gnueabi_gcc_arm5vte () {
+    # Mimic Debian armel port
+    msg "test: ${ARM_LINUX_GNUEABI_GCC_PREFIX}gcc -march=arm5vte, default config" # ~4m
+    make CC="${ARM_LINUX_GNUEABI_GCC_PREFIX}gcc" AR="${ARM_LINUX_GNUEABI_GCC_PREFIX}ar" CFLAGS='-Werror -Wall -Wextra -march=armv5te -O1'
+
+    msg "test: main suites make, default config (out-of-box)" # ~7m 40s
+    make test
+
+    msg "selftest: make, default config (out-of-box)" # ~0s
+    programs/test/selftest
+
+    msg "program demos: make, default config (out-of-box)" # ~0s
+    tests/scripts/run_demos.py
+}
+
+support_test_arm_linux_gnueabi_gcc_arm5vte () {
+    can_run_arm_linux_gnueabi
+}
+
+# The hard float ABI is not implemented for Thumb 1, so use gnueabi
+# Some Thumb 1 asm is sensitive to optimisation level, so test both -O0 and -Os
+component_test_arm_linux_gnueabi_gcc_thumb_1_opt_0 () {
+    msg "test: ${ARM_LINUX_GNUEABI_GCC_PREFIX}gcc -O0, thumb 1, default config" # ~2m 10s
+    make CC="${ARM_LINUX_GNUEABI_GCC_PREFIX}gcc" CFLAGS='-std=c99 -Werror -Wextra -O0 -mcpu=arm1136j-s -mthumb'
+
+    msg "test: main suites make, default config (out-of-box)" # ~36m
+    make test
+
+    msg "selftest: make, default config (out-of-box)" # ~10s
+    programs/test/selftest
+
+    msg "program demos: make, default config (out-of-box)" # ~0s
+    tests/scripts/run_demos.py
+}
+
+support_test_arm_linux_gnueabi_gcc_thumb_1_opt_0 () {
+    can_run_arm_linux_gnueabi
+}
+
+component_test_arm_linux_gnueabi_gcc_thumb_1_opt_s () {
+    msg "test: ${ARM_LINUX_GNUEABI_GCC_PREFIX}gcc -Os, thumb 1, default config" # ~3m 10s
+    make CC="${ARM_LINUX_GNUEABI_GCC_PREFIX}gcc" CFLAGS='-std=c99 -Werror -Wextra -Os -mcpu=arm1136j-s -mthumb'
+
+    msg "test: main suites make, default config (out-of-box)" # ~21m 10s
+    make test
+
+    msg "selftest: make, default config (out-of-box)" # ~2s
+    programs/test/selftest
+
+    msg "program demos: make, default config (out-of-box)" # ~0s
+    tests/scripts/run_demos.py
+}
+
+support_test_arm_linux_gnueabi_gcc_thumb_1_opt_s () {
+    can_run_arm_linux_gnueabi
+}
+
+component_test_arm_linux_gnueabihf_gcc_armv7 () {
+    msg "test: ${ARM_LINUX_GNUEABIHF_GCC_PREFIX}gcc -O2, A32, default config" # ~4m 30s
+    make CC="${ARM_LINUX_GNUEABIHF_GCC_PREFIX}gcc" CFLAGS='-std=c99 -Werror -Wextra -O2 -march=armv7-a -marm'
+
+    msg "test: main suites make, default config (out-of-box)" # ~3m 30s
+    make test
+
+    msg "selftest: make, default config (out-of-box)" # ~0s
+    programs/test/selftest
+
+    msg "program demos: make, default config (out-of-box)" # ~0s
+    tests/scripts/run_demos.py
+}
+
+support_test_arm_linux_gnueabihf_gcc_armv7 () {
+    can_run_arm_linux_gnueabihf
+}
+
+component_test_arm_linux_gnueabihf_gcc_thumb_2 () {
+    msg "test: ${ARM_LINUX_GNUEABIHF_GCC_PREFIX}gcc -Os, thumb 2, default config" # ~4m
+    make CC="${ARM_LINUX_GNUEABIHF_GCC_PREFIX}gcc" CFLAGS='-std=c99 -Werror -Wextra -Os -march=armv7-a -mthumb'
+
+    msg "test: main suites make, default config (out-of-box)" # ~3m 40s
+    make test
+
+    msg "selftest: make, default config (out-of-box)" # ~0s
+    programs/test/selftest
+
+    msg "program demos: make, default config (out-of-box)" # ~0s
+    tests/scripts/run_demos.py
+}
+
+support_test_arm_linux_gnueabihf_gcc_thumb_2 () {
+    can_run_arm_linux_gnueabihf
+}
+
+component_test_aarch64_linux_gnu_gcc () {
+    msg "test: ${AARCH64_LINUX_GNU_GCC_PREFIX}gcc -O2, default config" # ~3m 50s
+    make CC="${AARCH64_LINUX_GNU_GCC_PREFIX}gcc" CFLAGS='-std=c99 -Werror -Wextra -O2'
+
+    msg "test: main suites make, default config (out-of-box)" # ~1m 50s
+    make test
+
+    msg "selftest: make, default config (out-of-box)" # ~0s
+    programs/test/selftest
+
+    msg "program demos: make, default config (out-of-box)" # ~0s
+    tests/scripts/run_demos.py
+}
+
+support_test_aarch64_linux_gnu_gcc () {
+    # Minimum version of GCC for MBEDTLS_AESCE_C is 6.0
+    [ "$(gcc_version "${AARCH64_LINUX_GNU_GCC_PREFIX}gcc")" -ge 6 ] && can_run_aarch64_linux_gnu
 }
 
 component_build_arm_none_eabi_gcc () {
@@ -3261,14 +3490,8 @@ component_build_arm_clang_thumb () {
 }
 
 component_build_armcc () {
-    msg "build: ARM Compiler 5"
+    # Common configuration for all the builds below
     scripts/config.py baremetal
-    make CC="$ARMC5_CC" AR="$ARMC5_AR" WARNING_CFLAGS='--strict --c99' lib
-
-    msg "size: ARM Compiler 5"
-    "$ARMC5_FROMELF" -z library/*.o
-
-    make clean
 
     # Compile mostly with -O1 since some Arm inline assembly is disabled for -O0.
 
@@ -3295,9 +3518,8 @@ component_build_armcc () {
 }
 
 support_build_armcc () {
-    armc5_cc="$ARMC5_BIN_DIR/armcc"
     armc6_cc="$ARMC6_BIN_DIR/armclang"
-    (check_tools "$armc5_cc" "$armc6_cc" > /dev/null 2>&1)
+    (check_tools "$armc6_cc" > /dev/null 2>&1)
 }
 
 component_build_ssl_hw_record_accel() {
@@ -3317,17 +3539,27 @@ component_test_tls13_experimental () {
 
 component_build_mingw () {
     msg "build: Windows cross build - mingw64, make (Link Library)" # ~ 30s
-    make CC=i686-w64-mingw32-gcc AR=i686-w64-mingw32-ar LD=i686-w64-minggw32-ld CFLAGS='-Werror -Wall -Wextra' WINDOWS_BUILD=1 lib programs
+    make CC=i686-w64-mingw32-gcc AR=i686-w64-mingw32-ar CFLAGS='-Werror -Wall -Wextra' WINDOWS_BUILD=1 lib programs
 
     # note Make tests only builds the tests, but doesn't run them
-    make CC=i686-w64-mingw32-gcc AR=i686-w64-mingw32-ar LD=i686-w64-minggw32-ld CFLAGS='-Werror' WINDOWS_BUILD=1 tests
+    make CC=i686-w64-mingw32-gcc AR=i686-w64-mingw32-ar CFLAGS='-Werror' WINDOWS_BUILD=1 tests
     make WINDOWS_BUILD=1 clean
 
     msg "build: Windows cross build - mingw64, make (DLL)" # ~ 30s
-    make CC=i686-w64-mingw32-gcc AR=i686-w64-mingw32-ar LD=i686-w64-minggw32-ld CFLAGS='-Werror -Wall -Wextra' WINDOWS_BUILD=1 SHARED=1 lib programs
-    make CC=i686-w64-mingw32-gcc AR=i686-w64-mingw32-ar LD=i686-w64-minggw32-ld CFLAGS='-Werror -Wall -Wextra' WINDOWS_BUILD=1 SHARED=1 tests
+    make CC=i686-w64-mingw32-gcc AR=i686-w64-mingw32-ar CFLAGS='-Werror -Wall -Wextra' WINDOWS_BUILD=1 SHARED=1 lib programs
+    make CC=i686-w64-mingw32-gcc AR=i686-w64-mingw32-ar CFLAGS='-Werror -Wall -Wextra' WINDOWS_BUILD=1 SHARED=1 tests
+    make WINDOWS_BUILD=1 clean
+
+    msg "build: Windows cross build - mingw64, make (Library only, AESNI intrinsics)" # ~ 30s
+    make CC=i686-w64-mingw32-gcc AR=i686-w64-mingw32-ar CFLAGS='-Werror -Wall -Wextra -maes -msse2 -mpclmul' WINDOWS_BUILD=1 lib
+    make WINDOWS_BUILD=1 clean
+
+    msg "build: Windows cross build - mingw64, make (Library only, default config without MBEDTLS_AESNI_C)" # ~ 30s
+    ./scripts/config.py unset MBEDTLS_AESNI_C
+    make CC=i686-w64-mingw32-gcc AR=i686-w64-mingw32-ar CFLAGS='-Werror -Wall -Wextra' WINDOWS_BUILD=1 lib
     make WINDOWS_BUILD=1 clean
 }
+
 support_build_mingw() {
     case $(i686-w64-mingw32-gcc -dumpversion 2>/dev/null) in
         [0-5]*|"") false;;
@@ -3344,6 +3576,12 @@ component_test_memsan () {
     msg "test: main suites (MSan)" # ~ 10s
     make test
 
+    msg "test: metatests (MSan)"
+    tests/scripts/run-metatests.sh any msan
+
+    msg "program demos (MSan)" # ~20s
+    tests/scripts/run_demos.py
+
     msg "test: ssl-opt.sh (MSan)" # ~ 1 min
     tests/ssl-opt.sh
 
@@ -3355,7 +3593,7 @@ component_test_memsan () {
     fi
 }
 
-component_test_valgrind () {
+component_release_test_valgrind () {
     msg "build: Release (clang)"
     # default config, in particular without MBEDTLS_USE_PSA_CRYPTO
     CC=clang cmake -D CMAKE_BUILD_TYPE:String=Release .
@@ -3383,7 +3621,7 @@ component_test_valgrind () {
     fi
 }
 
-component_test_valgrind_psa () {
+component_release_test_valgrind_psa () {
     msg "build: Release, full (clang)"
     # full config, in particular with MBEDTLS_USE_PSA_CRYPTO
     scripts/config.py full
@@ -3529,7 +3767,7 @@ component_build_zeroize_checks () {
     scripts/config.py full
 
     # Only compile - we're looking for sizeof-pointer-memaccess warnings
-    make CC=gcc CFLAGS="'-DMBEDTLS_USER_CONFIG_FILE=\"../tests/configs/user-config-zeroize-memset.h\"' -DMBEDTLS_TEST_DEFINES_ZEROIZE -Werror -Wsizeof-pointer-memaccess"
+    make CFLAGS="'-DMBEDTLS_USER_CONFIG_FILE=\"../tests/configs/user-config-zeroize-memset.h\"' -DMBEDTLS_TEST_DEFINES_ZEROIZE -Werror -Wsizeof-pointer-memaccess"
 }
 
 
@@ -3562,12 +3800,13 @@ component_test_zeroize () {
 }
 
 component_test_psa_compliance () {
+    # The arch tests build with gcc, so require use of gcc here to link properly
     msg "build: make, default config + CMAC, libmbedcrypto.a only"
     scripts/config.py set MBEDTLS_CMAC_C
-    make -C library libmbedcrypto.a
+    CC=gcc make -C library libmbedcrypto.a
 
     msg "unit test: test_psa_compliance.py"
-    ./tests/scripts/test_psa_compliance.py
+    CC=gcc ./tests/scripts/test_psa_compliance.py
 }
 
 support_test_psa_compliance () {
@@ -3700,6 +3939,7 @@ pre_check_environment
 pre_initialize_variables
 pre_parse_command_line "$@"
 
+setup_quiet_wrappers
 pre_check_git
 pre_restore_files
 pre_back_up

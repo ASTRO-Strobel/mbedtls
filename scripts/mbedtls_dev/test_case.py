@@ -2,19 +2,8 @@
 """
 
 # Copyright The Mbed TLS Contributors
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
 #
-# Licensed under the Apache License, Version 2.0 (the "License"); you may
-# not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import binascii
 import os
@@ -42,6 +31,7 @@ class TestCase:
         self.dependencies = [] #type: List[str]
         self.function = None #type: Optional[str]
         self.arguments = [] #type: List[str]
+        self.skip_reason = ''
 
     def add_comment(self, *lines: str) -> None:
         self.comments += lines
@@ -57,6 +47,23 @@ class TestCase:
 
     def set_arguments(self, arguments: List[str]) -> None:
         self.arguments = arguments
+
+    def skip_because(self, reason: str) -> None:
+        """Skip this test case.
+
+        It will be included in the output, but commented out.
+
+        This is intended for test cases that are obtained from a
+        systematic enumeration, but that have dependencies that cannot
+        be fulfilled. Since we don't want to have test cases that are
+        never executed, we arrange not to have actual test cases. But
+        we do include comments to make it easier to understand the output
+        of test case generation.
+
+        reason must be a non-empty string explaining to humans why this
+        test case is skipped.
+        """
+        self.skip_reason = reason
 
     def check_completeness(self) -> None:
         if self.description is None:
@@ -78,10 +85,16 @@ class TestCase:
         out.write('\n')
         for line in self.comments:
             out.write('# ' + line + '\n')
-        out.write(self.description + '\n')
+        prefix = ''
+        if self.skip_reason:
+            prefix = '## '
+            out.write('## # skipped because: ' + self.skip_reason + '\n')
+        out.write(prefix + self.description + '\n')
         if self.dependencies:
-            out.write('depends_on:' + ':'.join(self.dependencies) + '\n')
-        out.write(self.function + ':' + ':'.join(self.arguments) + '\n')
+            out.write(prefix + 'depends_on:' +
+                      ':'.join(self.dependencies) + '\n')
+        out.write(prefix + self.function + ':' +
+                  ':'.join(self.arguments) + '\n')
 
 def write_data_file(filename: str,
                     test_cases: Iterable[TestCase],

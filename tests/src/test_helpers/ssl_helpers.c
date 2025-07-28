@@ -5,22 +5,12 @@
 
 /*
  *  Copyright The Mbed TLS Contributors
- *  SPDX-License-Identifier: Apache-2.0
- *
- *  Licensed under the Apache License, Version 2.0 (the "License"); you may
- *  not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *  http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- *  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ *  SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
  */
 
 #include <test/ssl_helpers.h>
+
+#include <limits.h>
 
 #if defined(MBEDTLS_SSL_TLS_C)
 
@@ -513,7 +503,10 @@ int mbedtls_test_mock_tcp_recv_msg(void *ctx,
              * happen in test environment, unless forced manually. */
         }
     }
-    mbedtls_test_ssl_message_queue_pop_info(queue, buf_len);
+    ret = mbedtls_test_ssl_message_queue_pop_info(queue, buf_len);
+    if (ret < 0) {
+        return ret;
+    }
 
     return (msg_len > INT_MAX) ? INT_MAX : (int) msg_len;
 }
@@ -727,6 +720,10 @@ int mbedtls_test_ssl_endpoint_init(
 
     ret = mbedtls_ssl_setup(&(ep->ssl), &(ep->conf));
     TEST_ASSERT(ret == 0);
+
+    if (MBEDTLS_SSL_IS_CLIENT == endpoint_type) {
+        ret = mbedtls_ssl_set_hostname(&(ep->ssl), "localhost");
+    }
 
 #if defined(MBEDTLS_SSL_PROTO_DTLS) && defined(MBEDTLS_SSL_SRV_C)
     if (endpoint_type == MBEDTLS_SSL_IS_SERVER && dtls_context != NULL) {

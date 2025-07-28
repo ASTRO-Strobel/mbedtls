@@ -2,19 +2,7 @@
  *  SSL client with certificate authentication
  *
  *  Copyright The Mbed TLS Contributors
- *  SPDX-License-Identifier: Apache-2.0
- *
- *  Licensed under the Apache License, Version 2.0 (the "License"); you may
- *  not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *  http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- *  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ *  SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
  */
 
 #include "ssl_test_lib.h"
@@ -76,6 +64,7 @@ int main(void)
 #define DFL_ARC4                -1
 #define DFL_SHA1                -1
 #define DFL_AUTH_MODE           -1
+#define DFL_SET_HOSTNAME        1
 #define DFL_MFL_CODE            MBEDTLS_SSL_MAX_FRAG_LEN_NONE
 #define DFL_TRUNC_HMAC          -1
 #define DFL_RECSPLIT            -1
@@ -392,6 +381,9 @@ int main(void)
 #define USAGE2 \
     "    auth_mode=%%s        default: (library default: none)\n" \
     "                        options: none, optional, required\n" \
+    "    set_hostname=%%s     call mbedtls_ssl_set_hostname()?" \
+    "                        options: no, server_name, NULL\n" \
+    "                        default: server_name (but ignored if certs disabled)\n"  \
     USAGE_IO                                                \
     USAGE_KEY_OPAQUE                                        \
     USAGE_CA_CALLBACK                                       \
@@ -438,7 +430,7 @@ int main(void)
     "                                otherwise. The expansion of the macro\n" \
     "                                is printed if it is defined\n"     \
     USAGE_SERIALIZATION                                     \
-    " acceptable ciphersuite names:\n"
+    "\n"
 
 #define ALPN_LIST_SIZE  10
 #define CURVE_LIST_SIZE 20
@@ -485,6 +477,8 @@ struct options {
     int arc4;                   /* flag for arc4 suites support             */
     int allow_sha1;             /* flag for SHA-1 support                   */
     int auth_mode;              /* verify mode for connection               */
+    int set_hostname;           /* call mbedtls_ssl_set_hostname()?         */
+                                /* 0=no, 1=yes, -1=NULL */
     unsigned char mfl_code;     /* code for maximum fragment length         */
     int trunc_hmac;             /* negotiate truncated hmac or not          */
     int recsplit;               /* enable record splitting?                 */
@@ -743,7 +737,7 @@ int main(int argc, char *argv[])
     mbedtls_net_init(&server_fd);
     mbedtls_ssl_init(&ssl);
     mbedtls_ssl_config_init(&conf);
-    memset(&saved_session, 0, sizeof(mbedtls_ssl_session));
+    mbedtls_ssl_session_init(&saved_session);
     rng_init(&rng);
 #if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED)
     mbedtls_x509_crt_init(&cacert);
@@ -766,31 +760,6 @@ int main(int argc, char *argv[])
 #if defined(MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG)
     mbedtls_test_enable_insecure_external_rng();
 #endif  /* MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG */
-
-    if (argc < 2) {
-usage:
-        if (ret == 0) {
-            ret = 1;
-        }
-
-        mbedtls_printf(USAGE1);
-        mbedtls_printf(USAGE2);
-        mbedtls_printf(USAGE3);
-        mbedtls_printf(USAGE4);
-
-        list = mbedtls_ssl_list_ciphersuites();
-        while (*list) {
-            mbedtls_printf(" %-42s", mbedtls_ssl_get_ciphersuite_name(*list));
-            list++;
-            if (!*list) {
-                break;
-            }
-            mbedtls_printf(" %s\n", mbedtls_ssl_get_ciphersuite_name(*list));
-            list++;
-        }
-        mbedtls_printf("\n");
-        goto exit;
-    }
 
     opt.server_name         = DFL_SERVER_NAME;
     opt.server_addr         = DFL_SERVER_ADDR;
@@ -833,6 +802,7 @@ usage:
     opt.arc4                = DFL_ARC4;
     opt.allow_sha1          = DFL_SHA1;
     opt.auth_mode           = DFL_AUTH_MODE;
+    opt.set_hostname        = DFL_SET_HOSTNAME;
     opt.mfl_code            = DFL_MFL_CODE;
     opt.trunc_hmac          = DFL_TRUNC_HMAC;
     opt.recsplit            = DFL_RECSPLIT;
@@ -864,9 +834,54 @@ usage:
     opt.force_srtp_profile  = DFL_SRTP_FORCE_PROFILE;
     opt.mki                 = DFL_SRTP_MKI;
 
+    p = q = NULL;
+    if (argc < 1) {
+usage:
+        if (p != NULL && q != NULL) {
+            printf("unrecognized value for '%s': '%s'\n", p, q);
+        } else if (p != NULL && q == NULL) {
+            printf("unrecognized param: '%s'\n", p);
+        }
+
+        mbedtls_printf("usage: ssl_client2 [param=value] [...]\n");
+        mbedtls_printf("       ssl_client2 help[_theme]\n");
+        mbedtls_printf("'help' lists acceptable 'param' and 'value'\n");
+        mbedtls_printf("'help_ciphersuites' lists available ciphersuites\n");
+        mbedtls_printf("\n");
+
+        if (ret == 0) {
+            ret = 1;
+        }
+        goto exit;
+    }
+
     for (i = 1; i < argc; i++) {
         p = argv[i];
+
+        if (strcmp(p, "help") == 0) {
+            mbedtls_printf(USAGE1);
+            mbedtls_printf(USAGE2);
+            mbedtls_printf(USAGE3);
+            mbedtls_printf(USAGE4);
+
+            ret = 0;
+            goto exit;
+        }
+        if (strcmp(p, "help_ciphersuites") == 0) {
+            mbedtls_printf(" acceptable ciphersuite names:\n");
+            for (list = mbedtls_ssl_list_ciphersuites();
+                 *list != 0;
+                 list++) {
+                mbedtls_printf(" %s\n", mbedtls_ssl_get_ciphersuite_name(*list));
+            }
+
+            ret = 0;
+            goto exit;
+        }
+
         if ((q = strchr(p, '=')) == NULL) {
+            mbedtls_printf("param requires a value: '%s'\n", p);
+            p = NULL; // avoid "unrecnognized param" message
             goto usage;
         }
         *q++ = '\0';
@@ -1140,6 +1155,16 @@ usage:
             } else {
                 goto usage;
             }
+        } else if (strcmp(p, "set_hostname") == 0) {
+            if (strcmp(q, "no") == 0) {
+                opt.set_hostname = 0;
+            } else if (strcmp(q, "server_name") == 0) {
+                opt.set_hostname = 1;
+            } else if (strcmp(q, "NULL") == 0) {
+                opt.set_hostname = -1;
+            } else {
+                goto usage;
+            }
         } else if (strcmp(p, "max_frag_len") == 0) {
             if (strcmp(q, "512") == 0) {
                 opt.mfl_code = MBEDTLS_SSL_MAX_FRAG_LEN_512;
@@ -1226,9 +1251,13 @@ usage:
         } else if (strcmp(p, "mki") == 0) {
             opt.mki = q;
         } else {
+            /* This signals that the problem is with p not q */
+            q = NULL;
             goto usage;
         }
     }
+    /* This signals that any further errors are not with a single option */
+    p = q = NULL;
 
     if (opt.nss_keylog != 0 && opt.eap_tls != 0) {
         mbedtls_printf("Error: eap_tls and nss_keylog options cannot be used together.\n");
@@ -1881,10 +1910,24 @@ usage:
     }
 
 #if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED)
-    if ((ret = mbedtls_ssl_set_hostname(&ssl, opt.server_name)) != 0) {
-        mbedtls_printf(" failed\n  ! mbedtls_ssl_set_hostname returned %d\n\n",
-                       ret);
-        goto exit;
+    switch (opt.set_hostname) {
+        case -1:
+            if ((ret = mbedtls_ssl_set_hostname(&ssl, NULL)) != 0) {
+                mbedtls_printf(" failed\n  ! mbedtls_ssl_set_hostname returned %d\n\n",
+                               ret);
+                goto exit;
+            }
+            break;
+        case 0:
+            /* Skip the call */
+            break;
+        default:
+            if ((ret = mbedtls_ssl_set_hostname(&ssl, opt.server_name)) != 0) {
+                mbedtls_printf(" failed\n  ! mbedtls_ssl_set_hostname returned %d\n\n",
+                               ret);
+                goto exit;
+            }
+            break;
     }
 #endif
 
@@ -2145,8 +2188,8 @@ usage:
             }
 
             /* get size of the buffer needed */
-            mbedtls_ssl_session_save(mbedtls_ssl_get_session_pointer(&ssl),
-                                     NULL, 0, &session_data_len);
+            (void) mbedtls_ssl_session_save(mbedtls_ssl_get_session_pointer(&ssl),
+                                            NULL, 0, &session_data_len);
             session_data = mbedtls_calloc(1, session_data_len);
             if (session_data == NULL) {
                 mbedtls_printf(" failed\n  ! alloc %u bytes for session data\n",

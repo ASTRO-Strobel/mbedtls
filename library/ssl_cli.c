@@ -2,19 +2,7 @@
  *  SSLv3/TLSv1 client-side functions
  *
  *  Copyright The Mbed TLS Contributors
- *  SPDX-License-Identifier: Apache-2.0
- *
- *  Licensed under the Apache License, Version 2.0 (the "License"); you may
- *  not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *  http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- *  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ *  SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
  */
 
 #include "common.h"
@@ -95,19 +83,20 @@ static int ssl_write_hostname_ext(mbedtls_ssl_context *ssl,
                                   size_t *olen)
 {
     unsigned char *p = buf;
+    const char *hostname = mbedtls_ssl_get_hostname_pointer(ssl);
     size_t hostname_len;
 
     *olen = 0;
 
-    if (ssl->hostname == NULL) {
+    if (hostname == NULL) {
         return 0;
     }
 
     MBEDTLS_SSL_DEBUG_MSG(3,
                           ("client hello, adding server name extension: %s",
-                           ssl->hostname));
+                           hostname));
 
-    hostname_len = strlen(ssl->hostname);
+    hostname_len = strlen(hostname);
 
     MBEDTLS_SSL_CHK_BUF_PTR(p, end, hostname_len + 9);
 
@@ -151,7 +140,7 @@ static int ssl_write_hostname_ext(mbedtls_ssl_context *ssl,
     MBEDTLS_PUT_UINT16_BE(hostname_len, p, 0);
     p += 2;
 
-    memcpy(p, ssl->hostname, hostname_len);
+    memcpy(p, hostname, hostname_len);
 
     *olen = hostname_len + 9;
 
